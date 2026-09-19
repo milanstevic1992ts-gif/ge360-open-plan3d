@@ -1,0 +1,35 @@
+name: Import OpenPlan3D
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.event.head_commit.message == 'Add one-shot OpenPlan3D importer'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout destination
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone upstream OpenPlan3D
+        run: |
+          git clone --depth 1 https://github.com/laanlabs/openPlan3D.git /tmp/openPlan3D
+
+      - name: Replace repository contents with upstream
+        run: |
+          rsync -a --delete --exclude='.git' /tmp/openPlan3D/ ./
+          git status --short
+
+      - name: Commit imported repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Import laanlabs/openPlan3D in full"
+          git push origin HEAD:main
