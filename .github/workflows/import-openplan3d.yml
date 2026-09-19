@@ -1,6 +1,7 @@
 name: Import OpenPlan3D
 
 on:
+  workflow_dispatch:
   issues:
     types: [opened]
 
@@ -9,7 +10,7 @@ permissions:
 
 jobs:
   import:
-    if: github.event.issue.title == 'IMPORT OPENPLAN3D NOW'
+    if: github.event_name == 'workflow_dispatch' || github.event.issue.title == 'IMPORT OPENPLAN3D NOW'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout destination
