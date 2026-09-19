@@ -1,15 +1,15 @@
 name: Import OpenPlan3D
 
 on:
-  push:
-    branches: [ main ]
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   import:
-    if: github.event.head_commit.message == 'Add one-shot OpenPlan3D importer'
+    if: github.event.issue.title == 'IMPORT OPENPLAN3D NOW'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout destination
