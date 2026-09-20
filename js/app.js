@@ -369,14 +369,43 @@
       type: mode,
       wallId: hit.wall.id,
       position: Math.max(.06, Math.min(.94, hit.t)),
-      widthCm: mode === 'door' ? 80 : 120
+      widthCm: mode === 'door' ? 80 : 120,
+      referenceEnd: hit.t <= 0.5 ? 'a' : 'b',
+      offsetCm: null
     };
     openings.push(opening);
     currentOpeningId = opening.id;
     numberText = (opening.widthCm / 100).toFixed(2).replace('.', ',');
-    openSheet('opening');
+    openSheet('opening-width');
     persistActive();
     render();
+  }
+
+  function recalcOpeningPosition(opening) {
+    if (!opening) return;
+    var wall = walls.find(function (w) { return w.id === opening.wallId; });
+    if (!wall || !wall.lengthCm || opening.offsetCm == null) return;
+
+    var half = (opening.widthCm || 0) / 2;
+    var centerFromA;
+    if (opening.referenceEnd === 'b') {
+      centerFromA = wall.lengthCm - opening.offsetCm - half;
+    } else {
+      centerFromA = opening.offsetCm + half;
+    }
+    var t = centerFromA / wall.lengthCm;
+    opening.position = Math.max(.01, Math.min(.99, t));
+  }
+
+  function toggleOpeningCorner() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    opening.referenceEnd = opening.referenceEnd === 'a' ? 'b' : 'a';
+    recalcOpeningPosition(opening);
+    persistActive();
+    openSheet('opening-offset');
+    render();
+    vibrate(20);
   }
 
   function openNextMissing(preferredId) {
@@ -397,14 +426,24 @@
       $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
     } else {
       var o = openings.find(function (x) { return x.id === currentOpeningId; });
-      $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
+      if (type === 'opening-width') {
+        $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
+        $('cornerToggleBtn').classList.add('hidden');
+      } else if (type === 'opening-offset') {
+        var side = o && o.referenceEnd === 'b' ? 'ANGOLO B' : 'ANGOLO A';
+        $('sheetKicker').textContent = 'DISTANZA ' + side + ' → BORDO ' + (o && o.type === 'door' ? 'PORTA' : 'FINESTRA');
+        $('cornerToggleBtn').classList.remove('hidden');
+        $('cornerToggleBtn').textContent = '↔ CAMBIA ANGOLO (' + side + ')';
+      }
     }
+    if (type === 'wall') $('cornerToggleBtn').classList.add('hidden');
     updateSheetValue();
   }
 
   function closeSheet() {
     sheetType = null;
     $('sheetBackdrop').classList.add('hidden');
+    $('cornerToggleBtn').classList.add('hidden');
     numberText = '';
     updateSheetValue();
   }
@@ -423,7 +462,7 @@
 
   function confirmSheet() {
     var meters = Number(numberText.replace(',', '.'));
-    if (!Number.isFinite(meters) || meters <= 0) return toast('Inserisci una misura');
+    if (!numberText.trim() || !Number.isFinite(meters) || (sheetType === 'opening-offset' ? meters < 0 : meters <= 0)) return toast('Inserisci una misura');
 
     if (sheetType === 'wall') {
       checkpoint();
@@ -442,10 +481,30 @@
         closeSheet();
         toast('Misure completate ✓');
       }
-    } else {
+    } else if (sheetType === 'opening-width') {
       checkpoint();
       var op = openings.find(function (o) { return o.id === currentOpeningId; });
       if (op) op.widthCm = Math.round(meters * 100);
+      persistActive();
+      numberText = '';
+      openSheet('opening-offset');
+      render();
+      toast('Ora misura dall’angolo al bordo');
+      return;
+    } else if (sheetType === 'opening-offset') {
+      checkpoint();
+      var op2 = openings.find(function (o) { return o.id === currentOpeningId; });
+      if (op2) {
+        var ow = walls.find(function (w) { return w.id === op2.wallId; });
+        var offsetCm = Math.round(meters * 100);
+        if (ow && ow.lengthCm && offsetCm + op2.widthCm > ow.lengthCm) {
+          toast('Non entra nel muro: riduci la distanza');
+          vibrate(80);
+          return;
+        }
+        op2.offsetCm = offsetCm;
+        recalcOpeningPosition(op2);
+      }
       currentOpeningId = null;
       persistActive();
       closeSheet();
@@ -466,7 +525,7 @@
 
   function planPayload(plan) {
     return {
-      version: 3,
+      version: 4,
       kind: 'ge360-rough-survey',
       planId: plan.id,
       name: plan.name || 'Rilievo',
@@ -644,6 +703,24 @@
     ctx.textBaseline = 'middle';
     ctx.fillText(opening.type === 'door' ? 'P' : 'F', x, y + 1);
     ctx.restore();
+
+    if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
+      var corner = opening.referenceEnd === 'b' ? wall.b : wall.a;
+      ctx.save();
+      ctx.fillStyle = '#f59e0b';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(corner.x, corner.y, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '1000 11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(opening.referenceEnd === 'b' ? 'B' : 'A', corner.x, corner.y + 1);
+      ctx.restore();
+    }
   }
 
   function render() {
@@ -727,6 +804,7 @@
   $('clearBtn').addEventListener('click', clearAll);
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
+  $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
