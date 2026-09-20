@@ -3,7 +3,7 @@ name: Import OpenPlan3D
 on:
   workflow_dispatch:
   pull_request:
-    types: [opened]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
 
       - name: Replace repository contents with upstream
         run: |
-          rsync -a --delete --exclude='.git' /tmp/openPlan3D/ ./
+          rsync -a --delete --exclude='.git' --exclude='.github/workflows/' /tmp/openPlan3D/ ./
           git status --short
 
       - name: Commit imported repository
@@ -33,5 +33,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Import laanlabs/openPlan3D in full"
+          git commit -m "Import laanlabs/openPlan3D in full (workflow files follow separately)"
           git push origin HEAD:main
