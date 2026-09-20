@@ -142,7 +142,7 @@
         <button id="closeToolsBtn" class="round-btn light" aria-label="Chiudi strumenti">✕</button>
       </div>
       <div class="tools-grid">
-        <button id="notesBtn" class="tool-card notes-btn hidden"><span>📝</span><b>APPUNTI</b><small>Lavorazioni e note</small></button>
+        <button id="notesBtn" class="tool-card notes-btn hidden"><span>🛠️</span><b>INTERVENTI</b><small>Demolizioni e lavorazioni</small></button>
         <button id="presentBtn" class="tool-card present-btn hidden"><span>👁</span><b>PRESENTA</b><small>Vista pulita</small></button>
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
         <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
@@ -248,7 +248,7 @@
   <div id="noteTargetBackdrop" class="modal-backdrop hidden">
     <section class="note-target-card">
       <div class="settings-head">
-        <div><div class="eyebrow dark">APPUNTI DI CANTIERE</div><h2>Cosa vuoi annotare?</h2></div>
+        <div><div class="eyebrow dark">INTERVENTI DI CANTIERE</div><h2>Dove devi lavorare?</h2></div>
         <button id="closeNoteTargetBtn" class="round-btn light" aria-label="Chiudi">✕</button>
       </div>
       <div class="note-target-grid">
@@ -258,7 +258,7 @@
         <button data-note-target="wall">▮<span>MURO</span></button>
         <button data-note-target="opening">🚪<span>PORTA / FINESTRA</span></button>
       </div>
-      <p class="note-target-help">Scegli il tipo, poi tocca direttamente l'elemento sulla pianta.</p>
+      <p class="note-target-help">Scegli muro, pavimento, soffitto, ambiente o apertura. Poi tocca l'elemento sulla pianta e seleziona una o più lavorazioni.</p>
     </section>
   </div>
 
@@ -266,15 +266,29 @@
     <section class="note-editor-card">
       <div class="settings-head">
         <div>
-          <div class="eyebrow dark">APPUNTO</div>
+          <div class="eyebrow dark">INTERVENTO</div>
           <h2 id="noteTargetTitle">Elemento</h2>
           <div id="noteTargetMeta" class="note-target-meta"></div>
         </div>
         <button id="closeNoteEditorBtn" class="round-btn light" aria-label="Chiudi">✕</button>
       </div>
 
-      <label class="note-label">Appunto grezzo
-        <textarea id="noteRawText" rows="7" placeholder="Es. togli piastrelle, sistemare tracce idraulico, impermeabilizzare doccia e nuove fino 120..."></textarea>
+      <div class="note-work-section">
+        <div class="note-section-title">LAVORAZIONI</div>
+        <div id="noteWorkPresets" class="note-work-presets"></div>
+        <p class="note-work-help">Puoi selezionare più lavorazioni sullo stesso elemento.</p>
+      </div>
+
+      <div class="note-style-section">
+        <div class="note-section-title">COME MOSTRARLO IN PIANTA</div>
+        <div class="note-style-toggle">
+          <button type="button" data-note-style="callout" class="active">💬 VIGNETTA</button>
+          <button type="button" data-note-style="text">T TESTO</button>
+        </div>
+      </div>
+
+      <label class="note-label">Nota / dettaglio <small>facoltativo</small>
+        <textarea id="noteRawText" rows="4" placeholder="Es. demolire fino al massetto, nuova piastrella 60×120, mantenere il battiscopa..."></textarea>
       </label>
 
       <div id="noteAiResult" class="note-ai-result hidden">
@@ -285,10 +299,10 @@
       </div>
 
       <div class="note-actions">
-        <button id="saveRawNoteBtn" class="secondary">SALVA GREZZO</button>
-        <button id="rewriteNoteBtn" class="primary">✨ SISTEMA CON IA</button>
+        <button id="saveRawNoteBtn" class="secondary">SALVA INTERVENTO</button>
+        <button id="rewriteNoteBtn" class="primary">✨ RISCRIVI NOTA</button>
       </div>
-      <button id="deleteNoteBtn" class="delete-opening hidden">🗑 ELIMINA APPUNTO</button>
+      <button id="deleteNoteBtn" class="delete-opening hidden">🗑 ELIMINA INTERVENTO</button>
     </section>
   </div>
 
