@@ -216,6 +216,8 @@ import {
     plan.rooms = clone(rooms);
     plan.notes = clone(notes);
     plan.photos = clone(photoRefs);
+    var linkedSite = sites.find(function (site) { return String(site.id) === String(plan.siteId || ''); }) || null;
+    plan.site = linkedSite ? clone(linkedSite) : null;
     plan.wallHeightM = wallHeightM;
     plan.liveScaleCmPerUnit = Number.isFinite(liveScaleCmPerUnit) ? liveScaleCmPerUnit : null;
     plan.editorLayer = editorLayer;
@@ -340,6 +342,7 @@ import {
     listPlanPhotos(id).then(function (records) {
       return Promise.all((records || []).map(function (record) { return deletePhoto(record.id); }));
     }).catch(function () {});
+    deletePlanBackups(id).catch(function () {});
     renderDashboard();
   }
 
@@ -440,10 +443,18 @@ import {
       editingSiteId=site.id;
     }
 
+    library.forEach(function (plan) {
+      if (String(plan.siteId || '') !== String(site.id)) return;
+      plan.site = clone(site);
+      plan.updatedAt = now;
+      scheduleAutoBackup(plan);
+    });
+
     if (siteModalAttachPlanId) {
       var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
       if (plan) {
         plan.siteId=site.id;
+        plan.site=clone(site);
         plan.updatedAt=now;
         scheduleAutoBackup(plan);
       }
@@ -465,6 +476,7 @@ import {
     var site=sites.find(function (x) { return String(x.id)===String(siteId); });
     if (!plan || !site) return;
     plan.siteId=site.id;
+    plan.site=clone(site);
     plan.updatedAt=new Date().toISOString();
     site.updatedAt=plan.updatedAt;
     saveLibrary();
@@ -481,6 +493,7 @@ import {
     var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
     if (!plan) return;
     plan.siteId=null;
+    plan.site=null;
     plan.updatedAt=new Date().toISOString();
     saveLibrary();
     scheduleAutoBackup(plan);
@@ -498,7 +511,7 @@ import {
     var question='Eliminare il cantiere “'+siteLabel(site)+'”?';
     if (linked.length) question+='\nI '+linked.length+' rilievi resteranno salvati ma senza cantiere.';
     if (!confirm(question)) return;
-    linked.forEach(function (plan) { plan.siteId=null; scheduleAutoBackup(plan); });
+    linked.forEach(function (plan) { plan.siteId=null; plan.site=null; scheduleAutoBackup(plan); });
     sites=sites.filter(function (x) { return String(x.id)!==String(site.id); });
     if (String(activeSiteFilter)===String(site.id)) activeSiteFilter='all';
     saveSites();
