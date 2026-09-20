@@ -1,6 +1,50 @@
 import { solveFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
 import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
+import {
+  createBackendMetadata,
+  ensureBackendMetadata,
+  refreshSourceRevision,
+  validateForProcessing,
+  buildProcessingPayload,
+  applyBackendSnapshot,
+  mergeVersions,
+  isTerminalStatus
+} from './processed-plan.js';
+import { BackendClient } from './backend-client.js';
+import { ProcessedPlanUI } from './processed-viewer.js';
+import {
+  presetsForTarget,
+  normalizeWorkItems,
+  workItemsLabel,
+  noteDisplayStyle,
+  migrateIntervention,
+  openingInterval,
+  mergeOpeningIntervals
+} from './site-annotations.js';
+import {
+  estimateScaleCmPerUnit,
+  applyMeasuredWallProportion,
+  findTJunctionCandidates
+} from './editor-geometry.js';
+import { syncDetectedRooms } from './auto-rooms.js';
+import { savePhoto, getPhoto, updatePhotoMetadata, deletePhoto, listPlanPhotos, compressPhoto } from './photo-store.js';
+import { buildProgressiveTakeoff } from './takeoff.js';
+import {
+  createPlanBackup,
+  listPlanBackups,
+  getPlanBackup,
+  deletePlanBackups
+} from './backup-store.js';
+import {
+  SITE_STATUSES,
+  createSite,
+  normalizeSite,
+  siteLabel,
+  statusLabel,
+  siteStats,
+  plansForSite
+} from './sites.js';
 
 (function () {
   'use strict';
@@ -12,8 +56,13 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
 
   var LIBRARY_KEY = 'ge360-rilievo-library-v3';
   var SETTINGS_KEY = 'ge360-rilievo-settings-v1';
+  var SITES_KEY = 'ge360-cantieri-v1';
 
   var library = [];
+  var sites = [];
+  var activeSiteFilter = 'all';
+  var editingSiteId = null;
+  var siteModalAttachPlanId = null;
   var settings = { serverUrl: '', apiKey: '' };
   var activePlanId = null;
   var mode = 'draw';
@@ -24,9 +73,24 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   var activePointerId = null;
   var selectedWallId = null;
   var currentOpeningId = null;
+  var wallMoveMode = null;
+  var openingMoveMode = null;
   var sheetType = null;
   var numberText = '';
   var history = [];
+  var future = [];
+  var liveScaleCmPerUnit = null;
+  var editorLayer = 'survey';
+  var selectedObject = null;
+  var longPressState = null;
+  var annotationHitBoxes = [];
+  var annotationDrag = null;
+  var photoRefs = [];
+  var pendingPhotoTarget = null;
+  var pendingPhotoPlacement = null;
+  var photoObjectUrls = [];
+  var backupTimer = null;
+  var backupInFlight = false;
   var dpr = 1;
   var viewZoom = 1;
   var viewRotation = 0;
@@ -47,6 +111,12 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   var notePickMode = null;
   var pendingNoteTarget = null;
   var currentNoteId = null;
+  var selectedNoteWorks = [];
+  var selectedNoteStyle = 'callout';
+  var processedUI = null;
+  var processingRunId = 0;
+  var PROCESS_POLL_MS = 2000;
+  var PROCESS_POLL_TIMEOUT_MS = 180000;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -77,9 +147,40 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
   }
 
+  function saveSites() {
+    localStorage.setItem(SITES_KEY, JSON.stringify(sites));
+  }
+
+  function scheduleAutoBackup(plan) {
+    if (!plan || !plan.id) return;
+    clearTimeout(backupTimer);
+    backupTimer = setTimeout(async function () {
+      if (backupInFlight) return;
+      backupInFlight = true;
+      try { await createPlanBackup(plan, 'auto'); } catch (_) {}
+      backupInFlight = false;
+    }, 1200);
+  }
+
   function loadAll() {
     library = parse(localStorage.getItem(LIBRARY_KEY), []);
+    sites = parse(localStorage.getItem(SITES_KEY), []).map(function (site) { return normalizeSite(site); });
     settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
+    var migrated = false;
+    library.forEach(function (plan) {
+      var hadBackend = !!(plan && plan.backend);
+      var hadRevision = !!(plan && plan.sourceRevision);
+      ensureBackendMetadata(plan);
+      if (!Array.isArray(plan.notes)) plan.notes = [];
+      plan.notes.forEach(function (note) {
+        var before = JSON.stringify(note);
+        migrateIntervention(note);
+        if (JSON.stringify(note) !== before) migrated = true;
+      });
+      if (!hadBackend || !hadRevision) migrated = true;
+    });
+    if (migrated) saveLibrary();
+    saveSites();
     renderDashboard();
     updateServerBadge();
   }
@@ -99,6 +200,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       windows: os.filter(function (o) { return o.type === 'window'; }).length,
       rooms: plan ? (plan.rooms || []).length : rooms.length,
       notes: plan ? (plan.notes || []).length : notes.length,
+      photos: plan ? (plan.photos || []).length : photoRefs.length,
       floorM2: plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null
     };
   }
@@ -113,11 +215,28 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     plan.openings = clone(openings);
     plan.rooms = clone(rooms);
     plan.notes = clone(notes);
+    plan.photos = clone(photoRefs);
+    var linkedSite = sites.find(function (site) { return String(site.id) === String(plan.siteId || ''); }) || null;
+    plan.site = linkedSite ? clone(linkedSite) : null;
     plan.wallHeightM = wallHeightM;
+    plan.liveScaleCmPerUnit = Number.isFinite(liveScaleCmPerUnit) ? liveScaleCmPerUnit : null;
+    plan.editorLayer = editorLayer;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
+    plan.takeoff = buildProgressiveTakeoff({
+      notes:notes,
+      walls:walls,
+      openings:openings,
+      rooms:rooms,
+      surfaceCache:surfaceCache,
+      wallHeightM:wallHeightM
+    });
     plan.summary = summary();
+    ensureBackendMetadata(plan);
+    refreshSourceRevision(plan);
     saveLibrary();
+    scheduleAutoBackup(plan);
+    if (processedUI) processedUI.render(plan);
     if (showToast) toast('Salvato ✓');
   }
 
@@ -129,12 +248,14 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     $('editor').classList.add('hidden');
     $('dashboard').classList.remove('hidden');
     activePlanId = null;
+    if (processedUI) processedUI.showTab('raw');
     renderDashboard();
   }
 
   function showEditor() {
     $('dashboard').classList.add('hidden');
     $('editor').classList.remove('hidden');
+    if (processedUI) processedUI.showTab('raw');
     requestAnimationFrame(resize);
   }
 
@@ -150,9 +271,15 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       openings: [],
       rooms: [],
       notes: [],
+      photos: [],
+      siteId: activeSiteFilter !== 'all' && activeSiteFilter !== 'none' ? activeSiteFilter : null,
       wallHeightM: 2.70,
-      view: { zoom: 1, rotation: 0 }
+      liveScaleCmPerUnit: null,
+      editorLayer: 'survey',
+      view: { zoom: 1, rotation: 0 },
+      backend: createBackendMetadata()
     };
+    refreshSourceRevision(plan);
     library.unshift(plan);
     saveLibrary();
     openPlan(plan.id);
@@ -161,31 +288,49 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   function openPlan(id) {
     var plan = library.find(function (p) { return p.id === id; });
     if (!plan) return;
+    ensureBackendMetadata(plan);
     activePlanId = id;
     rawStrokes = clone(plan.rawStrokes || []);
     walls = clone(plan.walls || []);
     openings = clone(plan.openings || []);
     rooms = clone(plan.rooms || []);
-    notes = clone(plan.notes || []);
+    notes = clone(plan.notes || []).map(function (note) { return migrateIntervention(note); });
+    photoRefs = clone(plan.photos || []);
+    pendingPhotoTarget = null;
     notePickMode = null;
     pendingNoteTarget = null;
     currentNoteId = null;
     wallHeightM = Number.isFinite(plan.wallHeightM) && plan.wallHeightM > 0 ? plan.wallHeightM : 2.70;
+    liveScaleCmPerUnit = Number.isFinite(plan.liveScaleCmPerUnit) && plan.liveScaleCmPerUnit > 0
+      ? plan.liveScaleCmPerUnit
+      : estimateScaleCmPerUnit(walls);
+    editorLayer = plan.editorLayer === 'works' ? 'works' : 'survey';
     surfaceCache = null;
     roomPickMode = false;
     viewZoom = plan.view && Number.isFinite(plan.view.zoom) ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, plan.view.zoom)) : 1;
     viewRotation = plan.view && Number.isFinite(plan.view.rotation) ? ((plan.view.rotation % 360) + 360) % 360 : 0;
     history = [];
+    future = [];
     currentStroke = null;
     selectedWallId = null;
     currentOpeningId = null;
+    selectedObject = null;
+    openingMoveMode = null;
+    annotationDrag = null;
     $('planName').value = plan.name || 'Rilievo';
     setMode('draw', false);
     showEditor();
     updateViewControls();
+    syncAutomaticRooms(false);
     updateUI();
     refreshSurfaceCache();
+    refreshSourceRevision(plan);
+    saveLibrary();
+    if (processedUI) processedUI.render(plan);
     render();
+    if (['UPLOADING', 'RAW', 'QUEUED', 'PROCESSING'].indexOf(plan.backend.status) !== -1 && settings.serverUrl && settings.apiKey) {
+      setTimeout(function () { resumeProcessing(plan); }, 0);
+    }
   }
 
   function deletePlan(id) {
@@ -194,6 +339,10 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     if (!confirm('Eliminare "' + (plan.name || 'Rilievo') + '"?')) return;
     library = library.filter(function (p) { return p.id !== id; });
     saveLibrary();
+    listPlanPhotos(id).then(function (records) {
+      return Promise.all((records || []).map(function (record) { return deletePhoto(record.id); }));
+    }).catch(function () {});
+    deletePlanBackups(id).catch(function () {});
     renderDashboard();
   }
 
@@ -205,13 +354,244 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     return b;
   }
 
-  function renderDashboard() {
-    var grid = $('planGrid');
-    grid.innerHTML = '';
-    $('emptyLibrary').classList.toggle('hidden', library.length > 0);
-    library.sort(function (a, b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+  function currentSite() {
+    var plan=currentPlan();
+    if (!plan || !plan.siteId) return null;
+    return sites.find(function (site) { return String(site.id)===String(plan.siteId); }) || null;
+  }
+
+  function fillSiteStatusSelect() {
+    var select=$('siteStatusInput');
+    select.innerHTML='';
+    SITE_STATUSES.forEach(function (status) {
+      var option=document.createElement('option');
+      option.value=status.code;
+      option.textContent=status.label;
+      select.appendChild(option);
+    });
+  }
+
+  function fillExistingSiteSelect(excludeId) {
+    var select=$('siteExistingSelect');
+    select.innerHTML='';
+    var empty=document.createElement('option');
+    empty.value='';
+    empty.textContent='Scegli un cantiere…';
+    select.appendChild(empty);
+    sites
+      .filter(function (site) { return !excludeId || String(site.id)!==String(excludeId); })
+      .sort(function (a,b) { return siteLabel(a).localeCompare(siteLabel(b),'it'); })
+      .forEach(function (site) {
+        var option=document.createElement('option');
+        option.value=site.id;
+        option.textContent=siteLabel(site)+' · '+statusLabel(site.status);
+        select.appendChild(option);
+      });
+  }
+
+  function openSiteModal(siteId, attachPlanId) {
+    editingSiteId=siteId || null;
+    siteModalAttachPlanId=attachPlanId || null;
+    fillSiteStatusSelect();
+    fillExistingSiteSelect(siteId);
+
+    var site=siteId ? sites.find(function (item) { return String(item.id)===String(siteId); }) : null;
+    var attachPlan=attachPlanId ? library.find(function (plan) { return String(plan.id)===String(attachPlanId); }) : null;
+    var showExisting=!!(attachPlan && !attachPlan.siteId && sites.length);
+    $('siteExistingWrap').classList.toggle('hidden',!showExisting);
+    $('siteModalTitle').textContent=site ? 'Modifica cantiere' : (attachPlan ? 'Collega il rilievo' : 'Nuovo cantiere');
+    $('siteTitleInput').value=site ? site.title || '' : '';
+    $('siteClientInput').value=site ? site.clientName || '' : '';
+    $('siteAddressInput').value=site ? site.address || '' : '';
+    $('sitePhoneInput').value=site ? site.phone || '' : '';
+    $('siteEmailInput').value=site ? site.email || '' : '';
+    $('siteStatusInput').value=site ? site.status : 'survey';
+    $('siteNotesInput').value=site ? site.notes || '' : '';
+    $('deleteSiteBtn').classList.toggle('hidden',!site);
+    $('detachPlanSiteBtn').classList.toggle('hidden',!(attachPlan && attachPlan.siteId));
+    $('siteBackdrop').classList.remove('hidden');
+  }
+
+  function closeSiteModal() {
+    $('siteBackdrop').classList.add('hidden');
+    editingSiteId=null;
+    siteModalAttachPlanId=null;
+  }
+
+  function saveSiteFromModal() {
+    var input={
+      title:$('siteTitleInput').value.trim(),
+      clientName:$('siteClientInput').value.trim(),
+      address:$('siteAddressInput').value.trim(),
+      phone:$('sitePhoneInput').value.trim(),
+      email:$('siteEmailInput').value.trim(),
+      status:$('siteStatusInput').value,
+      notes:$('siteNotesInput').value.trim()
+    };
+    if (!input.title && !input.clientName && !input.address) return toast('Inserisci almeno cliente, indirizzo o nome cantiere');
+
+    var now=new Date().toISOString();
+    var site;
+    if (editingSiteId) {
+      var idx=sites.findIndex(function (item) { return String(item.id)===String(editingSiteId); });
+      if (idx<0) return;
+      site=normalizeSite(Object.assign({},sites[idx],input,{updatedAt:now}));
+      sites[idx]=site;
+    } else {
+      site=createSite(Object.assign({},input,{updatedAt:now}),function () { return uid('site'); });
+      sites.unshift(site);
+      editingSiteId=site.id;
+    }
 
     library.forEach(function (plan) {
+      if (String(plan.siteId || '') !== String(site.id)) return;
+      plan.site = clone(site);
+      plan.updatedAt = now;
+      scheduleAutoBackup(plan);
+    });
+
+    if (siteModalAttachPlanId) {
+      var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
+      if (plan) {
+        plan.siteId=site.id;
+        plan.site=clone(site);
+        plan.updatedAt=now;
+        scheduleAutoBackup(plan);
+      }
+    }
+
+    saveSites();
+    saveLibrary();
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Cantiere salvato ✓');
+  }
+
+  function linkExistingSite() {
+    if (!siteModalAttachPlanId) return;
+    var siteId=$('siteExistingSelect').value;
+    if (!siteId) return toast('Scegli un cantiere');
+    var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
+    var site=sites.find(function (x) { return String(x.id)===String(siteId); });
+    if (!plan || !site) return;
+    plan.siteId=site.id;
+    plan.site=clone(site);
+    plan.updatedAt=new Date().toISOString();
+    site.updatedAt=plan.updatedAt;
+    saveLibrary();
+    saveSites();
+    scheduleAutoBackup(plan);
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Rilievo collegato a '+siteLabel(site)+' ✓');
+  }
+
+  function detachCurrentPlanSite() {
+    if (!siteModalAttachPlanId) return;
+    var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
+    if (!plan) return;
+    plan.siteId=null;
+    plan.site=null;
+    plan.updatedAt=new Date().toISOString();
+    saveLibrary();
+    scheduleAutoBackup(plan);
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Rilievo scollegato dal cantiere');
+  }
+
+  function deleteEditingSite() {
+    if (!editingSiteId) return;
+    var site=sites.find(function (x) { return String(x.id)===String(editingSiteId); });
+    if (!site) return;
+    var linked=library.filter(function (p) { return String(p.siteId || '')===String(site.id); });
+    var question='Eliminare il cantiere “'+siteLabel(site)+'”?';
+    if (linked.length) question+='\nI '+linked.length+' rilievi resteranno salvati ma senza cantiere.';
+    if (!confirm(question)) return;
+    linked.forEach(function (plan) { plan.siteId=null; plan.site=null; scheduleAutoBackup(plan); });
+    sites=sites.filter(function (x) { return String(x.id)!==String(site.id); });
+    if (String(activeSiteFilter)===String(site.id)) activeSiteFilter='all';
+    saveSites();
+    saveLibrary();
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Cantiere eliminato');
+  }
+
+  function openCurrentPlanSite() {
+    closeTools();
+    var site=currentSite();
+    openSiteModal(site ? site.id : null,activePlanId);
+  }
+
+  function renderSiteArchive() {
+    var grid = $('siteGrid');
+    grid.innerHTML = '';
+    $('showAllSitesBtn').classList.toggle('active', activeSiteFilter === 'all');
+    $('showNoSiteBtn').classList.toggle('active', activeSiteFilter === 'none');
+
+    sites
+      .slice()
+      .sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); })
+      .forEach(function (site) {
+        var stats = siteStats(site, library);
+        var card = document.createElement('article');
+        card.className = 'site-card' + (String(activeSiteFilter) === String(site.id) ? ' active' : '');
+        var head = document.createElement('div');
+        head.className = 'site-card-head';
+        var title = document.createElement('b');
+        title.textContent = siteLabel(site);
+        var badge = document.createElement('span');
+        badge.className = 'site-status ' + site.status;
+        badge.textContent = statusLabel(site.status);
+        head.appendChild(title);
+        head.appendChild(badge);
+
+        var meta = document.createElement('div');
+        meta.className = 'site-card-meta';
+        var bits = [];
+        if (site.clientName) bits.push(site.clientName);
+        if (site.address) bits.push(site.address);
+        bits.push(stats.plans + (stats.plans === 1 ? ' rilievo' : ' rilievi'));
+        if (stats.photos) bits.push(stats.photos + ' foto');
+        if (stats.takeoffRows) bits.push(stats.takeoffRows + ' voci computo');
+        meta.textContent = bits.join(' · ');
+
+        var actions=document.createElement('div');
+        actions.className='site-card-actions';
+        var filterBtn=document.createElement('button');
+        filterBtn.type='button';
+        filterBtn.textContent=String(activeSiteFilter)===String(site.id) ? 'MOSTRA TUTTI' : 'APRI RILIEVI';
+        filterBtn.addEventListener('click',function () {
+          activeSiteFilter=String(activeSiteFilter)===String(site.id) ? 'all' : site.id;
+          renderDashboard();
+        });
+        var editBtn=document.createElement('button');
+        editBtn.type='button';
+        editBtn.textContent='MODIFICA';
+        editBtn.addEventListener('click',function () { openSiteModal(site.id,null); });
+        actions.appendChild(filterBtn);
+        actions.appendChild(editBtn);
+        card.appendChild(head);
+        card.appendChild(meta);
+        card.appendChild(actions);
+        grid.appendChild(card);
+      });
+  }
+
+  function renderDashboard() {
+    renderSiteArchive();
+    var grid = $('planGrid');
+    grid.innerHTML = '';
+    var visiblePlans = plansForSite(library, activeSiteFilter)
+      .sort(function (a, b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+    $('emptyLibrary').classList.toggle('hidden', visiblePlans.length > 0);
+
+    visiblePlans.forEach(function (plan) {
       var card = document.createElement('article');
       card.className = 'plan-card';
 
@@ -226,6 +606,13 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var date = plan.updatedAt ? new Date(plan.updatedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       var h3 = document.createElement('h3');
       h3.textContent = plan.name || 'Rilievo';
+      var linkedSite = sites.find(function (site) { return String(site.id) === String(plan.siteId || ''); }) || null;
+      if (linkedSite) {
+        var siteLine = document.createElement('div');
+        siteLine.className = 'plan-site-line';
+        siteLine.textContent = '🏗️ ' + siteLabel(linkedSite);
+        info.appendChild(siteLine);
+      }
       var meta = document.createElement('div');
       meta.className = 'plan-meta';
       meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m² · ' : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
@@ -233,7 +620,11 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var actions = document.createElement('div');
       actions.className = 'plan-actions';
       actions.appendChild(makeButton('APRI', 'open-plan', function () { openPlan(plan.id); }));
-      actions.appendChild(makeButton('DEBIAN', 'send-plan', function () { sendPlan(plan.id); }));
+      actions.appendChild(makeButton('ELABORA', 'send-plan', function () {
+        openPlan(plan.id);
+        if (processedUI) processedUI.showTab('processed');
+        startProcessing(false);
+      }));
       actions.appendChild(makeButton('🗑', 'delete-plan', function () { deletePlan(plan.id); }));
 
       info.appendChild(h3);
@@ -283,26 +674,70 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     });
   }
 
-  function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, wallHeightM: wallHeightM }));
-    if (history.length > 30) history.shift();
+  function editorSnapshot() {
+    return JSON.stringify({
+      rawStrokes:rawStrokes,
+      walls:walls,
+      openings:openings,
+      rooms:rooms,
+      notes:notes,
+      wallHeightM:wallHeightM,
+      liveScaleCmPerUnit:liveScaleCmPerUnit,
+      editorLayer:editorLayer
+    });
   }
 
-  function undo() {
-    if (!history.length) return toast('Niente da annullare');
-    var data = JSON.parse(history.pop());
+  function restoreEditorSnapshot(raw) {
+    var data = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
     rawStrokes = data.rawStrokes || [];
     walls = data.walls || [];
     openings = data.openings || [];
     rooms = data.rooms || [];
-    notes = data.notes || [];
+    notes = (data.notes || []).map(function (note) { return migrateIntervention(note); });
     wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
+    liveScaleCmPerUnit = Number.isFinite(data.liveScaleCmPerUnit) ? data.liveScaleCmPerUnit : estimateScaleCmPerUnit(walls);
+    editorLayer = data.editorLayer === 'works' ? 'works' : 'survey';
     surfaceCache = null;
+    selectedObject = null;
+    openingMoveMode = null;
+    wallMoveMode = null;
+    annotationDrag = null;
     closeSheet();
+    hideObjectActionBar();
+    refreshSurfaceCache();
     persistActive();
     updateUI();
     render();
+  }
+
+  function checkpoint() {
+    history.push(editorSnapshot());
+    if (history.length > 40) history.shift();
+    future = [];
+    updateHistoryButtons();
+  }
+
+  function undo() {
+    if (!history.length) return toast('Niente da annullare');
+    future.push(editorSnapshot());
+    if (future.length > 40) future.shift();
+    restoreEditorSnapshot(history.pop());
+    updateHistoryButtons();
     vibrate(20);
+  }
+
+  function redo() {
+    if (!future.length) return toast('Niente da ripristinare');
+    history.push(editorSnapshot());
+    if (history.length > 40) history.shift();
+    restoreEditorSnapshot(future.pop());
+    updateHistoryButtons();
+    vibrate(20);
+  }
+
+  function updateHistoryButtons() {
+    if ($('undoBtn')) $('undoBtn').disabled = history.length === 0;
+    if ($('redoBtn')) $('redoBtn').disabled = future.length === 0;
   }
 
   function viewCenter() {
@@ -335,9 +770,13 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     };
   }
 
-  function point(e) {
+  function screenPoint(e) {
     var r = canvas.getBoundingClientRect();
-    return screenToWorld({ x: e.clientX - r.left, y: e.clientY - r.top });
+    return { x:e.clientX-r.left, y:e.clientY-r.top };
+  }
+
+  function point(e) {
+    return screenToWorld(screenPoint(e));
   }
 
   function updateViewControls() {
@@ -478,6 +917,8 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       stroke.wallIds.push(wall.id);
     }
 
+    autoRepairTJunctions();
+    syncAutomaticRooms(false);
     persistActive();
     updateUI();
     render();
@@ -526,6 +967,433 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     return best;
   }
 
+  function hideObjectActionBar() {
+    selectedObject = null;
+    $('objectActionBar').classList.add('hidden');
+    $('objectSwingBtn').classList.add('hidden');
+  }
+
+  function showObjectActionBar(type, object, hitT) {
+    if (!object) return;
+    selectedObject = { type:type, id:object.id, t:Number.isFinite(hitT) ? hitT : .5 };
+    if (type === 'wall') {
+      selectedWallId = object.id;
+      var wi = walls.findIndex(function (w) { return w.id === object.id; });
+      $('objectActionLabel').textContent = 'MURO ' + wallReference(wi) +
+        (Number.isFinite(object.lengthCm) ? ' · ' + (object.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '');
+      $('objectMeasureBtn').textContent = '📏 MISURA';
+      $('objectSwingBtn').classList.add('hidden');
+    } else {
+      currentOpeningId = object.id;
+      $('objectActionLabel').textContent = (object.type === 'door' ? 'PORTA' : 'FINESTRA') +
+        (Number.isFinite(object.widthCm) ? ' · ' + (object.widthCm / 100).toFixed(2).replace('.', ',') + ' m' : '');
+      $('objectMeasureBtn').textContent = '📏 LARGHEZZA';
+      $('objectSwingBtn').classList.toggle('hidden', object.type !== 'door');
+    }
+    $('objectActionBar').classList.remove('hidden');
+    render();
+  }
+
+  function selectedObjectData() {
+    if (!selectedObject) return null;
+    if (selectedObject.type === 'wall') return walls.find(function (w) { return w.id === selectedObject.id; }) || null;
+    return openings.find(function (o) { return o.id === selectedObject.id; }) || null;
+  }
+
+  function measureSelectedObject() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var type = selectedObject.type;
+    hideObjectActionBar();
+    if (type === 'wall') editWallMeasurement(obj);
+    else editOpening(obj);
+  }
+
+  function moveSelectedObject() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var selection = selectedObject;
+    hideObjectActionBar();
+    if (selection.type === 'wall') {
+      selectedWallId = obj.id;
+      startWallEndpointMove(selection.t <= .5 ? 'a' : 'b');
+      return;
+    }
+    openingMoveMode = { openingId:obj.id };
+    currentOpeningId = obj.id;
+    toast('Tocca la nuova posizione sullo stesso muro');
+    vibrate(14);
+  }
+
+  function photoTargetFromSelection() {
+    var obj = selectedObjectData();
+    if (!obj || !selectedObject) return null;
+    if (selectedObject.type === 'wall') {
+      var wi = walls.findIndex(function (w) { return w.id === obj.id; });
+      var room = roomForWall(obj.id);
+      return {
+        type:'wall',
+        id:obj.id,
+        label:'Muro ' + wallReference(wi) + (room ? ' · ' + room.name : ''),
+        roomName:room ? room.name : null,
+        targetPoint:{x:(obj.a.x+obj.b.x)/2,y:(obj.a.y+obj.b.y)/2}
+      };
+    }
+    var oroom = roomForWall(obj.wallId);
+    var ow = walls.find(function (w) { return w.id === obj.wallId; });
+    return {
+      type:'opening',
+      id:obj.id,
+      label:(obj.type === 'door' ? 'Porta' : 'Finestra') + (oroom ? ' · ' + oroom.name : ''),
+      roomName:oroom ? oroom.name : null,
+      targetPoint:ow ? openingWorldPoint(obj,ow) : null
+    };
+  }
+
+  function capturePhotoForTarget(target) {
+    if (!target || !activePlanId) return;
+    pendingPhotoTarget = {
+      type:String(target.type || 'plan'),
+      id:String(target.id || activePlanId),
+      label:String(target.label || 'Rilievo'),
+      roomName:target.roomName || null,
+      targetPoint:target.targetPoint && Number.isFinite(target.targetPoint.x) && Number.isFinite(target.targetPoint.y)
+        ? {x:target.targetPoint.x,y:target.targetPoint.y} : null
+    };
+    $('photoInput').value = '';
+    $('photoInput').click();
+  }
+
+  async function handlePhotoInput() {
+    var file = $('photoInput').files && $('photoInput').files[0];
+    if (!file || !pendingPhotoTarget || !activePlanId) return;
+    var target = pendingPhotoTarget;
+    pendingPhotoTarget = null;
+
+    try {
+      toast('Salvataggio foto…');
+      var blob = await compressPhoto(file, 1920, .82);
+      var id = uid('photo');
+      var meta = await savePhoto({
+        id:id,
+        planId:activePlanId,
+        targetType:target.type,
+        targetId:target.id,
+        targetLabel:target.label,
+        roomName:target.roomName,
+        targetPoint:target.targetPoint || null,
+        name:file.name || 'foto.jpg',
+        mime:blob.type || file.type || 'image/jpeg',
+        blob:blob,
+        createdAt:new Date().toISOString()
+      });
+      photoRefs.push(meta);
+      pendingPhotoPlacement = {
+        photoId:meta.id,
+        targetPoint:target.targetPoint || null
+      };
+      closeRoomModal();
+      closePhotosGallery();
+      $('photoPlacementBanner').classList.remove('hidden');
+      persistActive();
+      updateUI();
+      if (!$('roomBackdrop').classList.contains('hidden') && pendingRoomId) {
+        var count = photoCountForTarget('room', pendingRoomId);
+        $('roomPhotoCount').textContent = count + ' foto';
+      }
+      vibrate(24);
+      toast(target.targetPoint ? 'Foto salvata · indica da dove hai scattato' : 'Foto collegata ✓');
+    } catch (e) {
+      toast('Foto non salvata · ' + (e.message || 'errore archivio'));
+    }
+  }
+
+  function closePhotosGallery() {
+    $('photosBackdrop').classList.add('hidden');
+    photoObjectUrls.forEach(function (url) {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    });
+    photoObjectUrls = [];
+    $('photoGallery').innerHTML = '';
+  }
+
+  async function renderPhotoGallery() {
+    var gallery = $('photoGallery');
+    gallery.innerHTML = '';
+    photoObjectUrls.forEach(function (url) {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    });
+    photoObjectUrls = [];
+
+    var refs = photoRefs.slice().sort(function (a,b) {
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    $('photoGallerySummary').textContent = refs.length
+      ? refs.length + (refs.length === 1 ? ' foto collegata al rilievo' : ' foto collegate al rilievo')
+      : 'Nessuna foto ancora';
+
+    if (!refs.length) {
+      var empty = document.createElement('div');
+      empty.className = 'photo-empty';
+      empty.textContent = 'Scatta una foto da un muro, da una porta/finestra o da un ambiente.';
+      gallery.appendChild(empty);
+      return;
+    }
+
+    for (const ref of refs) {
+      var card = document.createElement('article');
+      card.className = 'photo-card';
+
+      var media = document.createElement('div');
+      media.className = 'photo-thumb-wrap';
+      var img = document.createElement('img');
+      img.className = 'photo-thumb';
+      img.alt = ref.targetLabel || 'Foto rilievo';
+      media.appendChild(img);
+      card.appendChild(media);
+
+      try {
+        var record = await getPhoto(ref.id);
+        if (record && record.blob) {
+          var url = URL.createObjectURL(record.blob);
+          photoObjectUrls.push(url);
+          img.src = url;
+        } else {
+          media.classList.add('missing');
+          media.textContent = 'FOTO NON DISPONIBILE';
+        }
+      } catch (_) {
+        media.classList.add('missing');
+        media.textContent = 'FOTO NON DISPONIBILE';
+      }
+
+      var info = document.createElement('div');
+      info.className = 'photo-card-info';
+      var title = document.createElement('b');
+      title.textContent = ref.targetLabel || 'Rilievo';
+      var meta = document.createElement('span');
+      var d = ref.createdAt ? new Date(ref.createdAt).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+      var directionText = Number.isFinite(ref.directionDeg) ? ' · ↗ ' + Math.round(ref.directionDeg) + '°' : '';
+      meta.textContent = (ref.roomName ? ref.roomName + ' · ' : '') + d + directionText + (ref.orphaned ? ' · SCOLLEGATA' : '');
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'photo-delete';
+      del.textContent = '🗑';
+      del.addEventListener('click', async function () {
+        if (!confirm('Eliminare questa foto dal rilievo e dal dispositivo?')) return;
+        try { await deletePhoto(ref.id); } catch (_) {}
+        photoRefs = photoRefs.filter(function (p) { return p.id !== ref.id; });
+        persistActive();
+        await renderPhotoGallery();
+        updateUI();
+        toast('Foto eliminata');
+      });
+
+      info.appendChild(del);
+      card.appendChild(info);
+      gallery.appendChild(card);
+    }
+  }
+
+  async function openPhotosGallery() {
+    closeTools();
+    $('photosBackdrop').classList.remove('hidden');
+    try {
+      var stored = await listPlanPhotos(activePlanId);
+      var known = new Set(photoRefs.map(function (p) { return p.id; }));
+      stored.forEach(function (record) {
+        if (known.has(record.id)) return;
+        photoRefs.push({
+          id:record.id,
+          targetType:record.targetType || 'plan',
+          targetId:record.targetId || '',
+          targetLabel:record.targetLabel || 'Rilievo',
+          roomName:record.roomName || null,
+          caption:record.caption || '',
+          name:record.name || 'foto.jpg',
+          mime:record.mime || 'image/jpeg',
+          size:record.size || 0,
+          createdAt:record.createdAt || null,
+          cameraPoint:record.cameraPoint || null,
+          targetPoint:record.targetPoint || null,
+          directionDeg:Number.isFinite(record.directionDeg) ? record.directionDeg : null,
+          localOnly:true
+        });
+      });
+      persistActive();
+    } catch (_) {}
+    await renderPhotoGallery();
+  }
+
+  function captureSelectedObjectPhoto() {
+    var target = photoTargetFromSelection();
+    if (!target) return hideObjectActionBar();
+    hideObjectActionBar();
+    capturePhotoForTarget(target);
+  }
+
+  function captureCurrentRoomPhoto() {
+    if (!pendingRoomId) return toast('Prima salva o seleziona l’ambiente');
+    var room = rooms.find(function (r) { return r.id === pendingRoomId; });
+    if (!room) return toast('Ambiente non disponibile');
+    var faces = buildFaces(walls);
+    var face = matchRoomFace(room, faces);
+    capturePhotoForTarget({
+      type:'room',
+      id:room.id,
+      label:room.name || 'Ambiente',
+      roomName:room.name || null,
+      targetPoint:face && face.centroid ? {x:face.centroid.x,y:face.centroid.y} : null
+    });
+  }
+
+  function directInterventionSelected() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var selection = selectedObject;
+    hideObjectActionBar();
+
+    if (selection.type === 'wall') {
+      var wi = walls.findIndex(function (w) { return w.id === obj.id; });
+      var room = roomForWall(obj.id);
+      openNoteEditor({
+        type:'wall',
+        id:obj.id,
+        label:'Muro ' + wallReference(wi) + (room ? ' · ' + room.name : ''),
+        roomName:room ? room.name : null,
+        context:{
+          lengthM:Number.isFinite(obj.lengthCm) ? obj.lengthCm / 100 : null,
+          wallHeightM:wallHeightM,
+          grossAreaM2:Number.isFinite(obj.lengthCm) ? Number(((obj.lengthCm / 100) * wallHeightM).toFixed(2)) : null
+        }
+      });
+      return;
+    }
+
+    var oroom = roomForWall(obj.wallId);
+    openNoteEditor({
+      type:'opening',
+      id:obj.id,
+      label:(obj.type === 'door' ? 'Porta' : 'Finestra') + (oroom ? ' · ' + oroom.name : ''),
+      roomName:oroom ? oroom.name : null,
+      context:{
+        openingType:obj.type,
+        widthM:Number.isFinite(obj.widthCm) ? obj.widthCm / 100 : null,
+        offsetM:Number.isFinite(obj.offsetCm) ? obj.offsetCm / 100 : null,
+        referenceEnd:obj.referenceEnd || null
+      }
+    });
+  }
+
+  function deleteSelectedObject() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var type = selectedObject.type;
+    hideObjectActionBar();
+    if (type === 'wall') {
+      selectedWallId = obj.id;
+      deleteSelectedWall();
+    } else {
+      currentOpeningId = obj.id;
+      deleteCurrentOpening();
+    }
+  }
+
+  function swingSelectedDoor() {
+    var obj = selectedObjectData();
+    if (!obj || selectedObject.type !== 'opening' || obj.type !== 'door') return;
+    currentOpeningId = obj.id;
+    toggleDoorSwing();
+    showObjectActionBar('opening', obj, obj.position);
+  }
+
+  function updateOpeningMoveAt(p) {
+    if (!openingMoveMode) return false;
+    var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    if (!opening) return false;
+    var wall = walls.find(function (w) { return w.id === opening.wallId; });
+    if (!wall) return false;
+    var hit = distToSegment(p, wall.a, wall.b);
+    if (hit.distance > 55 / viewZoom) return false;
+
+    opening.position = Math.max(.01, Math.min(.99, hit.t));
+    syncOpeningMetricFromPosition(opening, wall);
+    currentOpeningId = opening.id;
+    surfaceCache = null;
+    render();
+    return true;
+  }
+
+  function startOpeningMoveDrag(e, p) {
+    if (!openingMoveMode) return false;
+    var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    var wall = opening ? walls.find(function (w) { return w.id === opening.wallId; }) : null;
+    var hit = wall ? distToSegment(p, wall.a, wall.b) : null;
+    if (!hit || hit.distance > 55 / viewZoom) {
+      toast('Trascina sul muro della ' + (opening && opening.type === 'window' ? 'finestra' : 'porta'));
+      return true;
+    }
+    checkpoint();
+    openingMoveMode.dragging = true;
+    openingMoveMode.pointerId = e.pointerId;
+    updateOpeningMoveAt(p);
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    vibrate(12);
+    return true;
+  }
+
+  function updateOpeningMoveDrag(e) {
+    if (!openingMoveMode || !openingMoveMode.dragging || openingMoveMode.pointerId !== e.pointerId) return false;
+    var p = point(e);
+    updateOpeningMoveAt(p);
+    return true;
+  }
+
+  function finishOpeningMoveDrag(e) {
+    if (!openingMoveMode || !openingMoveMode.dragging || openingMoveMode.pointerId !== e.pointerId) return false;
+    var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    openingMoveMode = null;
+    persistActive();
+    updateUI();
+    render();
+    vibrate(20);
+    toast((opening && opening.type === 'window' ? 'Finestra' : 'Porta') + ' spostata ✓');
+    return true;
+  }
+
+  function armLongPress(pointerId, p) {
+    if (mode !== 'draw') return;
+    var oh = nearestOpening(p);
+    var wh = nearestWall(p);
+    var target = null;
+    if (oh && oh.distance <= 28 / viewZoom) target = { type:'opening', object:oh.opening, t:oh.opening.position };
+    else if (wh && wh.distance <= 28 / viewZoom) target = { type:'wall', object:wh.wall, t:wh.t };
+    if (!target) return;
+
+    cancelLongPress();
+    longPressState = {
+      pointerId:pointerId,
+      start:{ x:p.x, y:p.y },
+      handled:false,
+      timer:setTimeout(function () {
+        if (!longPressState || longPressState.pointerId !== pointerId) return;
+        longPressState.handled = true;
+        currentStroke = null;
+        activePointerId = null;
+        showObjectActionBar(target.type, target.object, target.t);
+        vibrate(35);
+      }, 430)
+    };
+  }
+
+  function cancelLongPress() {
+    if (longPressState && longPressState.timer) clearTimeout(longPressState.timer);
+    longPressState = null;
+  }
+
   function editWallMeasurement(wall) {
     if (!wall) return;
     selectedWallId = wall.id;
@@ -552,6 +1420,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     var label = opening.type === 'door' ? 'porta' : 'finestra';
     if (!confirm('Eliminare questa ' + label + '?')) return;
     checkpoint();
+    orphanPhotosForTarget('opening', opening.id, opening.type === 'door' ? 'Porta eliminata' : 'Finestra eliminata');
     openings = openings.filter(function (o) { return o.id !== opening.id; });
     notes = notes.filter(function (n) {
       return !(n.targetType === 'opening' && n.targetId === opening.id);
@@ -574,12 +1443,44 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   function cancelPickModes() {
     notePickMode = null;
     roomPickMode = false;
+    wallMoveMode = null;
     $('notesBtn').classList.remove('active');
     $('roomBtn').classList.remove('active');
   }
 
   function noteTargetKey(type, id) {
     return String(type) + ':' + String(id || '');
+  }
+
+  function wallReference(index) {
+    var n = Math.max(0, Number(index) || 0);
+    var out = '';
+    do {
+      out = String.fromCharCode(65 + (n % 26)) + out;
+      n = Math.floor(n / 26) - 1;
+    } while (n >= 0);
+    return out;
+  }
+
+  function interventionQuantityHint(target) {
+    if (!target || !target.context) return null;
+    var c = target.context;
+    if (target.type === 'floor' && Number.isFinite(c.areaM2)) {
+      return { value:c.areaM2, unit:'m2', basis:'floor_area' };
+    }
+    if (target.type === 'ceiling' && Number.isFinite(c.ceilingM2)) {
+      return { value:c.ceilingM2, unit:'m2', basis:'ceiling_area' };
+    }
+    if (target.type === 'wall' && Number.isFinite(c.grossAreaM2)) {
+      return { value:c.grossAreaM2, unit:'m2', basis:'gross_wall_area' };
+    }
+    if (target.type === 'opening') {
+      return { value:1, unit:'cad', basis:'opening_count' };
+    }
+    if (target.type === 'room' && Number.isFinite(c.areaM2)) {
+      return { value:c.areaM2, unit:'m2', basis:'floor_area' };
+    }
+    return null;
   }
 
   function faceRoom(face) {
@@ -637,6 +1538,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       context: {
         areaM2: metric && Number.isFinite(metric.floorM2) ? Number(metric.floorM2.toFixed(2)) : null,
         ceilingM2: metric && Number.isFinite(metric.ceilingM2) ? Number(metric.ceilingM2.toFixed(2)) : null,
+        perimeterM: metric && Number.isFinite(metric.perimeterM) ? Number(metric.perimeterM.toFixed(2)) : null,
+        wallsM2: metric && Number.isFinite(metric.wallsM2) ? Number(metric.wallsM2.toFixed(2)) : null,
+        wallsCeilingM2: metric && Number.isFinite(metric.wallsCeilingM2) ? Number(metric.wallsCeilingM2.toFixed(2)) : null,
         wallHeightM: wallHeightM
       }
     };
@@ -660,7 +1564,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       target = {
         type: 'wall',
         id: wall.id,
-        label: 'Muro ' + (idx + 1) + (room ? ' · ' + room.name : ''),
+        label: 'Muro ' + wallReference(idx) + (room ? ' · ' + room.name : ''),
         roomName: room ? room.name : null,
         context: {
           lengthM: Number.isFinite(wall.lengthCm) ? wall.lengthCm / 100 : null,
@@ -744,17 +1648,54 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     });
   }
 
+  function renderNoteWorkControls(type) {
+    var wrap = $('noteWorkPresets');
+    wrap.innerHTML = '';
+    presetsForTarget(type).forEach(function (item) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.workCode = item.code;
+      btn.dataset.workCategory = item.category;
+      btn.textContent = item.label;
+      btn.classList.toggle('selected', selectedNoteWorks.some(function (x) { return x.code === item.code; }));
+      btn.addEventListener('click', function () {
+        var exists = selectedNoteWorks.some(function (x) { return x.code === item.code; });
+        selectedNoteWorks = exists
+          ? selectedNoteWorks.filter(function (x) { return x.code !== item.code; })
+          : normalizeWorkItems(selectedNoteWorks.concat([item]));
+        renderNoteWorkControls(type);
+      });
+      wrap.appendChild(btn);
+    });
+
+    document.querySelectorAll('[data-note-style]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.noteStyle === selectedNoteStyle);
+    });
+  }
+
+  function setNoteDisplayStyle(style) {
+    selectedNoteStyle = noteDisplayStyle(style);
+    document.querySelectorAll('[data-note-style]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.noteStyle === selectedNoteStyle);
+    });
+  }
+
   function openNoteEditor(target) {
     pendingNoteTarget = target;
     var existing = existingNoteForTarget(target);
     currentNoteId = existing ? existing.id : null;
     $('noteTargetTitle').textContent = target.label;
     $('noteTargetMeta').textContent = target.roomName ? 'Ambiente: ' + target.roomName : '';
+    selectedNoteWorks = existing ? normalizeWorkItems(existing.workItems) : [];
+    selectedNoteStyle = noteDisplayStyle(existing && existing.displayStyle);
     $('noteRawText').value = existing ? existing.rawText || '' : '';
     $('deleteNoteBtn').classList.toggle('hidden', !existing);
+    renderNoteWorkControls(target.type);
     renderNoteAi(existing);
     $('noteEditorBackdrop').classList.remove('hidden');
-    requestAnimationFrame(function () { $('noteRawText').focus(); });
+    requestAnimationFrame(function () {
+      if (!selectedNoteWorks.length) $('noteRawText').focus();
+    });
   }
 
   function closeNoteEditor(saveDraft) {
@@ -765,15 +1706,19 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     $('noteEditorBackdrop').classList.add('hidden');
     pendingNoteTarget = null;
     currentNoteId = null;
+    selectedNoteWorks = [];
+    selectedNoteStyle = 'callout';
   }
 
   function saveCurrentNote(silent) {
     if (!pendingNoteTarget) return null;
     var raw = $('noteRawText').value.trim();
-    if (!raw) {
-      if (!silent) toast('Scrivi prima un appunto');
+    var workItems = normalizeWorkItems(selectedNoteWorks);
+    if (!raw && !workItems.length) {
+      if (!silent) toast('Scegli una lavorazione o scrivi una nota');
       return null;
     }
+    if (!raw) raw = workItemsLabel(workItems);
 
     var existing = currentNoteId ? notes.find(function (n) { return n.id === currentNoteId; }) : existingNoteForTarget(pendingNoteTarget);
     if (!existing) {
@@ -786,6 +1731,10 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
         targetLabel: pendingNoteTarget.label,
         roomName: pendingNoteTarget.roomName || null,
         context: clone(pendingNoteTarget.context || {}),
+        quantityHint: interventionQuantityHint(pendingNoteTarget),
+        kind: 'intervention',
+        workItems: workItems,
+        displayStyle: selectedNoteStyle,
         rawText: raw,
         cleanedText: '',
         tasks: [],
@@ -797,13 +1746,18 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       currentNoteId = existing.id;
     } else {
       checkpoint();
-      if (existing.rawText !== raw) {
+      var workChanged = JSON.stringify(normalizeWorkItems(existing.workItems)) !== JSON.stringify(workItems);
+      if (existing.rawText !== raw || workChanged) {
         existing.cleanedText = '';
         existing.tasks = [];
         existing.needsClarification = [];
         existing.model = null;
         existing.rewrittenAt = null;
       }
+      existing.kind = 'intervention';
+      existing.quantityHint = interventionQuantityHint(pendingNoteTarget);
+      existing.workItems = workItems;
+      existing.displayStyle = selectedNoteStyle;
       existing.rawText = raw;
       existing.targetLabel = pendingNoteTarget.label;
       existing.roomName = pendingNoteTarget.roomName || null;
@@ -815,13 +1769,13 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     updateUI();
     $('deleteNoteBtn').classList.remove('hidden');
     renderNoteAi(existing);
-    if (!silent) toast('Appunto salvato ✓');
+    if (!silent) toast('Intervento salvato ✓');
     return existing;
   }
 
   async function rewriteCurrentNote() {
     var note = saveCurrentNote(true);
-    if (!note) return toast('Scrivi prima un appunto');
+    if (!note) return toast('Scegli una lavorazione o scrivi una nota');
     if (!settings.serverUrl || !settings.apiKey) {
       toast('Configura prima il Debian');
       openSettings();
@@ -849,6 +1803,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
           targetId: note.targetId,
           targetLabel: note.targetLabel,
           roomName: note.roomName,
+          workItems: note.workItems || [],
+          displayStyle: note.displayStyle || 'callout',
+          quantityHint: note.quantityHint || null,
           context: note.context || {}
         })
       });
@@ -871,7 +1828,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       note.updatedAt = note.rewrittenAt;
       persistActive();
       renderNoteAi(note);
-      toast('Appunto sistemato ✓');
+      toast('Nota intervento sistemata ✓');
     } catch (e) {
       toast('IA non disponibile: ' + e.message);
     } finally {
@@ -883,13 +1840,13 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   function deleteCurrentNote() {
     var note = currentNoteId ? notes.find(function (n) { return n.id === currentNoteId; }) : null;
     if (!note) return;
-    if (!confirm('Eliminare questo appunto?')) return;
+    if (!confirm('Eliminare questo intervento?')) return;
     checkpoint();
     notes = notes.filter(function (n) { return n.id !== note.id; });
     persistActive();
     updateUI();
     closeNoteEditor(false);
-    toast('Appunto eliminato');
+    toast('Intervento eliminato');
   }
 
   function setMode(next, announce) {
@@ -923,7 +1880,8 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       position: Math.max(.06, Math.min(.94, hit.t)),
       widthCm: mode === 'door' ? 80 : 120,
       referenceEnd: hit.t <= 0.5 ? 'a' : 'b',
-      offsetCm: null
+      offsetCm: null,
+      swingSide: mode === 'door' ? 1 : null
     };
     openings.push(opening);
     currentOpeningId = opening.id;
@@ -949,6 +1907,195 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     opening.position = Math.max(.01, Math.min(.99, t));
   }
 
+  function syncOpeningMetricFromPosition(opening, wall) {
+    if (!opening || !wall || !Number.isFinite(wall.lengthCm) || wall.lengthCm <= 0) return;
+    var t = Math.max(.001, Math.min(.999, Number.isFinite(opening.position) ? opening.position : .5));
+    var half = (Number.isFinite(opening.widthCm) ? opening.widthCm : 0) / 2;
+    if (opening.referenceEnd === 'b') {
+      opening.offsetCm = Math.max(0, Math.round(wall.lengthCm * (1 - t) - half));
+    } else {
+      opening.offsetCm = Math.max(0, Math.round(wall.lengthCm * t - half));
+    }
+  }
+
+  function refreshWallInterventionLabels() {
+    notes.forEach(function (note) {
+      if (note.targetType !== 'wall') return;
+      var idx = walls.findIndex(function (w) { return w.id === note.targetId; });
+      if (idx < 0) return;
+      var room = roomForWall(note.targetId);
+      note.targetLabel = 'Muro ' + wallReference(idx) + (room ? ' · ' + room.name : '');
+      note.roomName = room ? room.name : null;
+    });
+  }
+
+  function splitWallAtTJunction(target, branch, branchEnd, point, t) {
+    var targetIndex = walls.findIndex(function (w) { return w.id === target.id; });
+    if (targetIndex < 0 || !(t > .04 && t < .96)) return false;
+
+    var oldB = { x:target.b.x, y:target.b.y };
+    var oldLength = Number.isFinite(target.lengthCm) && target.lengthCm > 0 ? target.lengthCm : null;
+    var oldTargetId = target.id;
+    var newId = uid('w');
+    var firstLength = oldLength ? Math.max(1, Math.round(oldLength * t)) : null;
+    var secondLength = oldLength ? Math.max(1, oldLength - firstLength) : null;
+    if (oldLength && firstLength + secondLength !== oldLength) secondLength = oldLength - firstLength;
+
+    target.b = { x:point.x, y:point.y };
+    if (oldLength) target.lengthCm = firstLength;
+    target.derivedSplit = true;
+    target.parentWallId = target.parentWallId || oldTargetId;
+    target.measurementSource = oldLength ? 'derived_t_split' : (target.measurementSource || 'unmeasured');
+    target.parentLengthCm = oldLength || target.parentLengthCm || null;
+    target.requiresMeasureVerification = !!oldLength;
+    target.splitRatio = t;
+
+    var second = Object.assign({}, target, {
+      id:newId,
+      a:{ x:point.x, y:point.y },
+      b:oldB,
+      lengthCm:secondLength,
+      parentWallId:target.parentWallId || oldTargetId,
+      measurementSource:oldLength ? 'derived_t_split' : 'unmeasured',
+      parentLengthCm:oldLength,
+      requiresMeasureVerification:!!oldLength,
+      splitRatio:1-t,
+      derivedSplit:true
+    });
+    walls.splice(targetIndex + 1, 0, second);
+    branch[branchEnd] = { x:point.x, y:point.y };
+
+    rawStrokes.forEach(function (stroke) {
+      if (!Array.isArray(stroke.wallIds)) return;
+      var pos = stroke.wallIds.indexOf(oldTargetId);
+      if (pos >= 0) stroke.wallIds.splice(pos + 1, 0, newId);
+    });
+
+    openings.forEach(function (opening) {
+      if (opening.wallId !== oldTargetId) return;
+      var pos = Number.isFinite(opening.position) ? opening.position : .5;
+      if (pos <= t) {
+        opening.position = Math.max(.01, Math.min(.99, pos / t));
+        syncOpeningMetricFromPosition(opening, target);
+      } else {
+        opening.wallId = newId;
+        opening.position = Math.max(.01, Math.min(.99, (pos - t) / (1 - t)));
+        syncOpeningMetricFromPosition(opening, second);
+      }
+    });
+
+    var duplicates = [];
+    notes.forEach(function (note) {
+      if (note.targetType !== 'wall' || note.targetId !== oldTargetId) return;
+      var copy = clone(note);
+      copy.id = uid('note');
+      copy.targetId = newId;
+      copy.targetKey = noteTargetKey('wall', newId);
+      copy.createdAt = new Date().toISOString();
+      copy.updatedAt = copy.createdAt;
+      duplicates.push(copy);
+    });
+    notes = notes.concat(duplicates);
+
+    rooms.forEach(function (room) {
+      if (!Array.isArray(room.wallIds)) return;
+      var pos = room.wallIds.indexOf(oldTargetId);
+      if (pos < 0) return;
+      if (room.wallIds.indexOf(newId) === -1) room.wallIds.splice(pos + 1, 0, newId);
+      room.faceKey = room.wallIds.slice().sort().join('|');
+    });
+
+    return true;
+  }
+
+  function autoRepairTJunctions() {
+    var repaired = 0;
+    for (var pass = 0; pass < 8; pass++) {
+      var candidates = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
+      if (!candidates.length) break;
+      var c = candidates[0];
+      var branch = walls.find(function (w) { return w.id === c.branchWallId; });
+      var target = walls.find(function (w) { return w.id === c.targetWallId; });
+      if (!branch || !target) break;
+
+      var h = distToSegment(branch[c.branchEnd], target.a, target.b);
+      if (!(h.t > .055 && h.t < .945) || h.distance > Math.max(8 / viewZoom, 4)) break;
+      var q = {
+        x:target.a.x + (target.b.x - target.a.x) * h.t,
+        y:target.a.y + (target.b.y - target.a.y) * h.t
+      };
+      if (!splitWallAtTJunction(target, branch, c.branchEnd, q, h.t)) break;
+      repaired++;
+    }
+
+    if (repaired) {
+      surfaceCache = null;
+      refreshWallInterventionLabels();
+      openings.forEach(function (o) { recalcOpeningPosition(o); });
+      toast(repaired === 1 ? 'Innesto a T riconosciuto ✓' : repaired + ' innesti a T riconosciuti ✓');
+    }
+    return repaired;
+  }
+
+  function applyClosedGeometryLive() {
+    var missing = walls.some(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing || !walls.length) return false;
+    try {
+      var result = solveFloorPlan(solverInput(), { mode:'normal', maxClosureGapCm:10 });
+      if (!result.success || !result.closure || !result.closure.closed || (result.errors || []).length) return false;
+      var solved = (result.walls || []).filter(function (w) { return w.status === 'solved' && w.a && w.b; });
+      if (!solved.length) return false;
+
+      var scale = Number.isFinite(liveScaleCmPerUnit) && liveScaleCmPerUnit > 0 ? liveScaleCmPerUnit : 1;
+      var oldBounds = solverPointBounds(walls);
+      var solvedUnits = solved.map(function (w) {
+        return Object.assign({}, w, {
+          a:{ x:w.a.x / scale, y:w.a.y / scale },
+          b:{ x:w.b.x / scale, y:w.b.y / scale }
+        });
+      });
+      var newBounds = solverPointBounds(solvedUnits);
+      if (!oldBounds || !newBounds) return false;
+      var oldCx = (oldBounds.minX + oldBounds.maxX) / 2;
+      var oldCy = (oldBounds.minY + oldBounds.maxY) / 2;
+      var newCx = (newBounds.minX + newBounds.maxX) / 2;
+      var newCy = (newBounds.minY + newBounds.maxY) / 2;
+      var byId = new Map(solvedUnits.map(function (w) { return [w.id, w]; }));
+
+      walls = walls.map(function (old) {
+        var sw = byId.get(old.id);
+        if (!sw) return old;
+        return Object.assign({}, old, {
+          a:{ x:sw.a.x + oldCx - newCx, y:sw.a.y + oldCy - newCy },
+          b:{ x:sw.b.x + oldCx - newCx, y:sw.b.y + oldCy - newCy },
+          lengthCm:sw.lengthCm
+        });
+      });
+      rawStrokes = [];
+      openings.forEach(function (o) { recalcOpeningPosition(o); });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function applyLiveProportion(wallId) {
+    var wall = walls.find(function (w) { return w.id === wallId; });
+    if (!wall || !Number.isFinite(wall.lengthCm) || wall.lengthCm <= 0) return;
+
+    var tolerance = Math.max(3 / viewZoom, .75);
+    var adjusted = applyMeasuredWallProportion(walls, wall.id, liveScaleCmPerUnit, tolerance);
+    walls = adjusted.walls;
+    liveScaleCmPerUnit = adjusted.scaleCmPerUnit;
+
+    autoRepairTJunctions();
+    var globallyClosed = applyClosedGeometryLive();
+    surfaceCache = null;
+    openings.forEach(function (o) { recalcOpeningPosition(o); });
+    refreshSurfaceCache();
+    if (adjusted.moved || globallyClosed) vibrate(12);
+  }
+
   function toggleOpeningCorner() {
     var opening = openings.find(function (o) { return o.id === currentOpeningId; });
     if (!opening) return;
@@ -958,6 +2105,141 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     openSheet('opening-offset');
     render();
     vibrate(20);
+  }
+
+  function toggleDoorSwing() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening || opening.type !== 'door') return;
+    opening.swingSide = opening.swingSide === -1 ? 1 : -1;
+    persistActive();
+    render();
+    vibrate(18);
+    toast('Apertura porta invertita');
+  }
+
+  function orphanPhotosForTarget(type, id, label) {
+    photoRefs.forEach(function (photo) {
+      if (photo.targetType !== type || String(photo.targetId) !== String(id)) return;
+      photo.orphaned = true;
+      photo.originalTargetType = type;
+      photo.originalTargetId = id;
+      photo.targetType = 'plan';
+      photo.targetId = activePlanId || '';
+      photo.targetLabel = 'SCOLLEGATA · ' + String(label || photo.targetLabel || 'Elemento eliminato');
+      photo.roomName = null;
+      photo.targetPoint = null;
+      photo.directionDeg = null;
+      updatePhotoMetadata(photo.id,{targetType:'plan',targetId:activePlanId || '',targetLabel:photo.targetLabel,roomName:null,targetPoint:null,directionDeg:null}).catch(function () {});
+    });
+  }
+
+  function deleteSelectedWall() {
+    var wall = walls.find(function (w) { return w.id === selectedWallId; });
+    if (!wall) return;
+
+    var idx = walls.findIndex(function (w) { return w.id === wall.id; });
+    var label = 'Muro ' + wallReference(idx);
+    var measure = Number.isFinite(wall.lengthCm) ? ' · ' + (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '';
+    var linkedOpenings = openings.filter(function (o) { return o.wallId === wall.id; });
+    var question = 'Eliminare ' + label + measure + '?';
+    if (linkedOpenings.length) question += '\nVerranno eliminate anche ' + linkedOpenings.length + ' aperture collegate.';
+    if (!confirm(question)) return;
+
+    checkpoint();
+
+    var openingIds = new Set(linkedOpenings.map(function (o) { return o.id; }));
+    orphanPhotosForTarget('wall', wall.id, label);
+    linkedOpenings.forEach(function (opening) {
+      orphanPhotosForTarget('opening', opening.id, opening.type === 'door' ? 'Porta eliminata' : 'Finestra eliminata');
+    });
+    openings = openings.filter(function (o) { return o.wallId !== wall.id; });
+
+    notes = notes.filter(function (n) {
+      if (n.targetType === 'wall' && n.targetId === wall.id) return false;
+      if (n.targetType === 'opening' && openingIds.has(n.targetId)) return false;
+      return true;
+    });
+
+    rooms = rooms.map(function (room) {
+      if (!Array.isArray(room.wallIds) || room.wallIds.indexOf(wall.id) === -1) return room;
+      var nextIds = room.wallIds.filter(function (id) { return id !== wall.id; });
+      return Object.assign({}, room, {
+        wallIds: nextIds,
+        faceKey: nextIds.slice().sort().join('|')
+      });
+    });
+
+    // Il vecchio tratto grezzo non deve rimanere come una linea fantasma.
+    rawStrokes = rawStrokes.filter(function (stroke) {
+      return !(Array.isArray(stroke.wallIds) && stroke.wallIds.indexOf(wall.id) !== -1);
+    });
+
+    walls = walls.filter(function (w) { return w.id !== wall.id; });
+    selectedWallId = null;
+    surfaceCache = null;
+    syncAutomaticRooms(false);
+    closeSheet();
+    refreshSurfaceCache();
+    persistActive();
+    updateUI();
+    render();
+    vibrate(30);
+    toast(label + ' eliminato');
+  }
+
+  function startWallEndpointMove(end) {
+    var wall = walls.find(function (w) { return w.id === selectedWallId; });
+    if (!wall || (end !== 'a' && end !== 'b')) return;
+    wallMoveMode = {
+      wallId: wall.id,
+      end: end,
+      origin: { x: wall[end].x, y: wall[end].y }
+    };
+    closeSheet();
+    selectedWallId = wall.id;
+    toast('Tocca la nuova posizione dell’' + (end === 'a' ? 'inizio' : 'fine') + ' muro');
+    vibrate(16);
+    render();
+  }
+
+  function commitWallEndpointMove(p) {
+    if (!wallMoveMode) return false;
+    var wall = walls.find(function (w) { return w.id === wallMoveMode.wallId; });
+    if (!wall) {
+      wallMoveMode = null;
+      return false;
+    }
+
+    checkpoint();
+    var origin = wallMoveMode.origin;
+    var tolerance = Math.max(3 / viewZoom, 1e-6);
+
+    // Muove l'intero nodo: tutti i muri che condividono esattamente quell'angolo
+    // seguono il punto, così la continuità non viene spezzata.
+    walls.forEach(function (candidate) {
+      ['a', 'b'].forEach(function (end) {
+        if (!candidate[end]) return;
+        if (dist(candidate[end], origin) <= tolerance) {
+          candidate[end] = { x: p.x, y: p.y };
+        }
+      });
+    });
+
+    // Dopo una modifica manuale la geometria a muri è la fonte visuale.
+    // Rimuoviamo gli stroke grezzi per evitare sovrapposizioni fantasma.
+    rawStrokes = [];
+    surfaceCache = null;
+    wallMoveMode = null;
+    autoRepairTJunctions();
+    syncAutomaticRooms(false);
+    openings.forEach(function (o) { recalcOpeningPosition(o); });
+    refreshSurfaceCache();
+    persistActive();
+    updateUI();
+    render();
+    vibrate(24);
+    toast('Angolo spostato ✓');
+    return true;
   }
 
   function openNextMissing(preferredId) {
@@ -974,11 +2256,15 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     sheetType = type;
     $('sheetBackdrop').classList.remove('hidden');
     $('deleteOpeningBtn').classList.toggle('hidden', type === 'wall');
+    $('deleteWallBtn').classList.toggle('hidden', type !== 'wall');
+    $('wallEditActions').classList.toggle('hidden', type !== 'wall');
+    $('swingToggleBtn').classList.add('hidden');
     if (type === 'wall') {
       var idx = walls.findIndex(function (w) { return w.id === selectedWallId; });
-      $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
+      $('sheetKicker').textContent = 'MODIFICA MURO ' + wallReference(idx) + ' · ' + (idx + 1) + ' DI ' + walls.length;
     } else {
       var o = openings.find(function (x) { return x.id === currentOpeningId; });
+      $('swingToggleBtn').classList.toggle('hidden', !(o && o.type === 'door'));
       if (type === 'opening-width') {
         $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
         $('cornerToggleBtn').classList.add('hidden');
@@ -998,6 +2284,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     sheetType = null;
     $('sheetBackdrop').classList.add('hidden');
     $('cornerToggleBtn').classList.add('hidden');
+    $('swingToggleBtn').classList.add('hidden');
+    $('wallEditActions').classList.add('hidden');
+    $('deleteWallBtn').classList.add('hidden');
     $('deleteOpeningBtn').classList.add('hidden');
     numberText = '';
     updateSheetValue();
@@ -1024,6 +2313,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var wall = walls.find(function (w) { return w.id === selectedWallId; });
       if (wall) {
         wall.lengthCm = Math.round(meters * 100);
+        wall.measurementSource = 'measured';
+        wall.requiresMeasureVerification = false;
+        applyLiveProportion(wall.id);
         openings.filter(function (o) { return o.wallId === wall.id; }).forEach(function (o) {
           recalcOpeningPosition(o);
         });
@@ -1032,6 +2324,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var strokeId = wall ? wall.strokeId : null;
       var next = walls.find(function (w) { return w.strokeId === strokeId && !w.lengthCm && w.id !== selectedWallId; });
       if (!next) next = walls.find(function (w) { return !w.lengthCm && w.id !== selectedWallId; });
+      syncAutomaticRooms(false);
       persistActive();
       if (next) {
         selectedWallId = next.id;
@@ -1041,6 +2334,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
         selectedWallId = null;
         closeSheet();
         refreshSurfaceCache();
+        syncAutomaticRooms(true);
         toast('Misure completate ✓');
       }
     } else if (sheetType === 'opening-width') {
@@ -1088,21 +2382,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   }
 
   function planPayload(plan) {
-    return {
-      version: 4,
-      kind: 'ge360-rough-survey',
-      planId: plan.id,
-      name: plan.name || 'Rilievo',
-      updatedAt: plan.updatedAt || new Date().toISOString(),
-      rawStrokes: plan.rawStrokes || [],
-      walls: plan.walls || [],
-      openings: plan.openings || [],
-      rooms: plan.rooms || [],
-      notes: plan.notes || [],
-      wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
-      surfaces: plan.surfaceSummary || null,
-      summary: summary(plan)
-    };
+    var payload = buildProcessingPayload(plan);
+    payload.summary = summary(plan);
+    return payload;
   }
 
   function solverInput() {
@@ -1349,19 +2631,95 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     viewRotation = 0;
     updateViewControls();
     refreshSurfaceCache();
+    syncAutomaticRooms(true);
     persistActive();
     updateUI();
     render();
     closeSolver();
-    toast('Pianta sistemata ✓');
+    var repaired = solverResult && solverResult.stats ? (solverResult.stats.repairedJoints || 0) : 0;
+    var trulyClosed = !!(solverResult && solverResult.closure && solverResult.closure.closed);
+    if (trulyClosed) {
+      toast('Pianta chiusa e proporzionata ✓' + (repaired ? ' · ' + repaired + ' giunti ricuciti' : ''));
+    } else {
+      toast('Pianta sistemata · chiusura da verificare');
+    }
   }
 
   function faceKey(face) {
     return (face && face.wallIds ? face.wallIds.slice().sort().join('|') : '');
   }
 
+  function photoCountForTarget(type, id) {
+    return photoRefs.filter(function (p) {
+      return p.targetType === type && String(p.targetId) === String(id);
+    }).length;
+  }
+
+  function openRoomEditorForFace(face, existing, autoPrompt) {
+    if (!face) return;
+    pendingRoomFace = face;
+    var key = faceKey(face);
+    if (!existing) {
+      existing = rooms.find(function (r) {
+        return r.faceKey === key || faceKey({ wallIds:r.wallIds }) === key;
+      }) || null;
+    }
+    pendingRoomId = existing ? existing.id : null;
+    selectedRoomName = existing && !existing.needsNaming ? existing.name : '';
+    $('roomCustomName').value = existing && existing.custom && !existing.needsNaming ? existing.name : '';
+    document.querySelectorAll('[data-room-name]').forEach(function (b) {
+      b.classList.toggle('selected', !!(existing && !existing.needsNaming && existing.name === b.dataset.roomName));
+    });
+    $('roomModalTitle').textContent = autoPrompt ? 'Nuovo ambiente rilevato' : 'Che stanza è?';
+    $('roomAutoHint').classList.toggle('hidden', !autoPrompt);
+    var count = existing ? photoCountForTarget('room', existing.id) : 0;
+    $('roomPhotoCount').textContent = count + (count === 1 ? ' foto' : ' foto');
+    $('roomPhotoBtn').disabled = !existing;
+    $('roomBackdrop').classList.remove('hidden');
+  }
+
+  function syncAutomaticRooms(promptNew) {
+    if (!walls.length) return [];
+    var faces = buildFaces(walls).filter(function (face) {
+      return face && face.quality !== 'verify' && Array.isArray(face.wallIds) && face.wallIds.length >= 3;
+    });
+    var result = syncDetectedRooms(
+      rooms,
+      faces,
+      function () { return uid('room'); },
+      new Date().toISOString()
+    );
+    rooms = result.rooms;
+
+    if (result.created.length) {
+      surfaceCache = null;
+      persistActive();
+      updateUI();
+      render();
+    }
+
+    var pendingAuto = rooms.find(function (room) {
+      return room && room.needsNaming && !room.geometryMissing;
+    }) || null;
+
+    if (promptNew && pendingAuto && $('roomBackdrop').classList.contains('hidden') && $('sheetBackdrop').classList.contains('hidden')) {
+      var face = faces.find(function (f) { return faceKey(f) === pendingAuto.faceKey; }) || null;
+      if (face) {
+        setTimeout(function () {
+          openRoomEditorForFace(face, pendingAuto, true);
+          vibrate(24);
+        }, 0);
+      }
+    } else if (result.created.length) {
+      toast(result.created.length === 1 ? 'Nuovo ambiente riconosciuto ✓' : result.created.length + ' ambienti riconosciuti ✓');
+    }
+    return result.created;
+  }
+
   function openRoomPicker() {
     if (!walls.length) return toast('Prima disegna la pianta');
+    closePresentation();
+    closeSurfaces();
     cancelPickModes();
     roomPickMode = true;
     $('roomBtn').classList.add('active');
@@ -1378,20 +2736,27 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     }
     roomPickMode = false;
     $('roomBtn').classList.remove('active');
-    pendingRoomFace = face;
     var key = faceKey(face);
-    var existing = rooms.find(function (r) { return r.faceKey === key || faceKey({ wallIds: r.wallIds }) === key; });
-    pendingRoomId = existing ? existing.id : null;
-    selectedRoomName = existing ? existing.name : '';
-    $('roomCustomName').value = existing && existing.custom ? existing.name : '';
-    document.querySelectorAll('[data-room-name]').forEach(function (b) {
-      b.classList.toggle('selected', existing && existing.name === b.dataset.roomName);
-    });
-    $('roomBackdrop').classList.remove('hidden');
+    var existing = rooms.find(function (r) {
+      return r.faceKey === key || faceKey({ wallIds:r.wallIds }) === key;
+    }) || null;
+    if (!existing) {
+      var synced = syncDetectedRooms(
+        rooms,
+        [face],
+        function () { return uid('room'); },
+        new Date().toISOString()
+      );
+      rooms = synced.rooms;
+      existing = synced.created[0] || null;
+    }
+    openRoomEditorForFace(face, existing, false);
   }
 
   function closeRoomModal() {
     $('roomBackdrop').classList.add('hidden');
+    $('roomAutoHint').classList.add('hidden');
+    $('roomModalTitle').textContent = 'Che stanza è?';
     pendingRoomFace = null;
     pendingRoomId = null;
     selectedRoomName = '';
@@ -1420,13 +2785,26 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     var key = wallIds.join('|');
     var room = pendingRoomId ? rooms.find(function (r) { return r.id === pendingRoomId; }) : null;
     if (!room) {
-      room = { id: uid('room'), name: name, wallIds: wallIds, faceKey: key, custom: !!custom };
+      room = {
+        id:uid('room'),
+        name:name,
+        wallIds:wallIds,
+        faceKey:key,
+        custom:!!custom,
+        autoDetected:false,
+        needsNaming:false,
+        geometryMissing:false,
+        namedAt:new Date().toISOString()
+      };
       rooms.push(room);
     } else {
       room.name = name;
       room.wallIds = wallIds;
       room.faceKey = key;
       room.custom = !!custom;
+      room.needsNaming = false;
+      room.geometryMissing = false;
+      room.namedAt = new Date().toISOString();
     }
     notes.forEach(function (note) {
       if (['room', 'floor', 'ceiling'].indexOf(note.targetType) !== -1) {
@@ -1443,7 +2821,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       if (note.targetType === 'wall' && wallIds.indexOf(note.targetId) !== -1) {
         var wi = walls.findIndex(function (w) { return w.id === note.targetId; });
         note.roomName = room.name;
-        note.targetLabel = 'Muro ' + (wi + 1) + ' · ' + room.name;
+        note.targetLabel = 'Muro ' + wallReference(wi) + ' · ' + room.name;
         note.updatedAt = new Date().toISOString();
         return;
       }
@@ -1456,12 +2834,20 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
         note.updatedAt = new Date().toISOString();
       }
     });
+    photoRefs.forEach(function (photo) {
+      if (photo.targetType !== 'room') return;
+      if (String(photo.targetId) !== String(key) && String(photo.targetId) !== String(room.id)) return;
+      photo.targetId = room.id;
+      photo.targetLabel = room.name;
+      photo.roomName = room.name;
+    });
     surfaceCache = null;
     persistActive();
     closeRoomModal();
     refreshSurfaceCache();
     render();
     toast(name + ' salvato ✓');
+    setTimeout(function () { syncAutomaticRooms(true); }, 0);
   }
 
   function parseHeightInput() {
@@ -1626,7 +3012,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
       var title = String(room.name || 'Ambiente').toUpperCase();
       var state = surfaceStatus(metric ? metric.status : face.quality);
-      var statusText = state.label;
+      var statusText = room.needsNaming ? 'DA NOMINARE' : state.label;
 
       ctx.save();
       ctx.font = '1000 12px system-ui';
@@ -1637,8 +3023,8 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var w3 = ctx.measureText(statusText).width;
       var boxW = Math.max(w1, w2, w3) + 20;
       var boxH = area ? 58 : 42;
-      ctx.fillStyle = 'rgba(255,255,255,.94)';
-      ctx.strokeStyle = '#cbd5e1';
+      ctx.fillStyle = room.needsNaming ? 'rgba(255,251,235,.97)' : 'rgba(255,255,255,.94)';
+      ctx.strokeStyle = room.needsNaming ? '#f59e0b' : '#cbd5e1';
       ctx.lineWidth = 1.5;
       roundRect(p.x - boxW / 2, p.y - boxH / 2, boxW, boxH, 11);
       ctx.fill();
@@ -1653,7 +3039,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
         ctx.font = '800 11px system-ui';
         ctx.fillText(area, p.x, p.y + 3);
       }
-      ctx.fillStyle = state.cls === 'ok' ? '#15803d' : state.cls === 'estimated' ? '#b45309' : '#b91c1c';
+      ctx.fillStyle = room.needsNaming ? '#b45309' : state.cls === 'ok' ? '#15803d' : state.cls === 'estimated' ? '#b45309' : '#b91c1c';
       ctx.font = '900 9px system-ui';
       ctx.fillText(statusText, p.x, p.y + (area ? 19 : 10));
       ctx.restore();
@@ -1665,6 +3051,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   }
 
   function openPresentation() {
+    if (roomPickMode) return toast('Prima termina la selezione AMBIENTE');
     cancelPickModes();
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
@@ -1674,13 +3061,30 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     }
 
     var solved = solvedPresentationWalls();
-    var cleanWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
-    var cache = calculateSurfaces(cleanWalls, rooms, wallHeightM);
+    var solvedClosed = !!(
+      solved.result &&
+      solved.result.success &&
+      solved.result.closure &&
+      solved.result.closure.closed &&
+      solved.walls &&
+      solved.walls.length
+    );
+    var calculationWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
+    var displayWalls = solvedClosed ? clone(solved.walls) : clone(walls);
+    var cache = calculateSurfaces(calculationWalls, rooms, wallHeightM);
     presentationModel = {
-      walls: cleanWalls,
+      // Se il motore ha chiuso davvero il rilievo, PRESENTA mostra la versione
+      // proporzionata secondo le misure. Se non riesce a chiudere, non mostriamo
+      // una geometria parziale o spezzata: restiamo sullo schizzo originale.
+      walls: displayWalls,
+      calculationWalls: calculationWalls,
       openings: clone(openings),
       rooms: clone(rooms),
-      surfaces: cache
+      notes: clone(notes),
+      surfaces: cache,
+      geometrySolved: solvedClosed,
+      closure: solved.result && solved.result.closure ? clone(solved.result.closure) : null,
+      repairedJoints: solved.result && solved.result.stats ? (solved.result.stats.repairedJoints || 0) : 0
     };
 
     var plan = currentPlan();
@@ -1693,7 +3097,10 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       wallsM2: null,
       wallsCeilingM2: null
     };
-    $('presentationStamp').textContent = 'Rilievo indicativo · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
+    var geometryLabel = presentationModel.geometrySolved
+      ? 'PIANTA CHIUSA E PROPORZIONATA'
+      : 'RILIEVO DA VERIFICARE';
+    $('presentationStamp').textContent = geometryLabel + ' · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
     $('presentationSummary').innerHTML =
       presentationCard('PAVIMENTO', displayTotals.floorM2) +
       presentationCard('SOFFITTO', displayTotals.ceilingM2) +
@@ -1744,9 +3151,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
 
     function tp(p) { return { x: p.x * scale + ox, y: p.y * scale + oy }; }
 
-    var faces = presentationModel.surfaces.faces || [];
+    var displayFaces = buildFaces(pwalls);
     presentationModel.rooms.forEach(function (room, idx) {
-      var face = matchRoomFace(room, faces);
+      var face = matchRoomFace(room, displayFaces);
       if (!face) return;
       pctx.fillStyle = idx % 2 ? 'rgba(14,165,233,.055)' : 'rgba(37,99,235,.045)';
       pctx.beginPath();
@@ -1786,29 +3193,37 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     presentationModel.openings.forEach(function (opening) {
       var wall = pwalls.find(function (w) { return w.id === opening.wallId; });
       if (!wall) return;
-      var q = openingWorldPoint(opening, wall);
-      if (!q) return;
-      var p = tp(q);
-      pctx.fillStyle = opening.type === 'door' ? '#16a34a' : '#0891b2';
-      pctx.strokeStyle = '#ffffff';
-      pctx.lineWidth = 3;
-      pctx.beginPath();
-      pctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-      pctx.fill();
-      pctx.stroke();
-      pctx.fillStyle = '#ffffff';
-      pctx.font = '900 8px system-ui';
-      pctx.textAlign = 'center';
-      pctx.textBaseline = 'middle';
-      pctx.fillText(opening.type === 'door' ? 'P' : 'F', p.x, p.y + .5);
+      drawOpeningSymbol(pctx, opening, wall, tp, {
+        wallWidth: 6,
+        background: '#ffffff',
+        showLabel: true,
+        compact: true
+      });
     });
 
     var metricByRoom = new Map();
     (presentationModel.surfaces.roomMetrics || []).forEach(function (m) { metricByRoom.set(m.room.id, m); });
+
+    function roomDisplayAnchor(room) {
+      var face = matchRoomFace(room, displayFaces);
+      if (face) return face.centroid;
+      var ids = Array.isArray(room.wallIds) ? room.wallIds : [];
+      var pts = [];
+      pwalls.forEach(function (wall) {
+        if (ids.indexOf(wall.id) === -1) return;
+        pts.push(wall.a, wall.b);
+      });
+      if (!pts.length) return null;
+      return {
+        x: pts.reduce(function (sum, q) { return sum + q.x; }, 0) / pts.length,
+        y: pts.reduce(function (sum, q) { return sum + q.y; }, 0) / pts.length
+      };
+    }
+
     presentationModel.rooms.forEach(function (room) {
-      var face = matchRoomFace(room, faces);
-      if (!face) return;
-      var p = tp(face.centroid);
+      var anchor = roomDisplayAnchor(room);
+      if (!anchor) return;
+      var p = tp(anchor);
       var metric = metricByRoom.get(room.id);
       var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
       var title = String(room.name || 'Ambiente').toUpperCase();
@@ -1822,6 +3237,12 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
         pctx.font = '900 11px system-ui';
         pctx.fillText(area, p.x, p.y + 9);
       }
+    });
+
+    (presentationModel.notes || []).forEach(function (note) {
+      var anchor = noteAnchorForGeometry(note, pwalls, presentationModel.openings, presentationModel.rooms, displayFaces);
+      if (!anchor) return;
+      drawInterventionAnnotation(pctx, note, tp(anchor), { compact:true });
     });
   }
 
@@ -1850,50 +3271,292 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     $('serverBadge').textContent = ok ? '● Debian configurato' : '● Debian non collegato';
   }
 
+  function backendClient(custom) {
+    return new BackendClient(Object.assign({
+      baseUrl: settings.serverUrl,
+      apiKey: settings.apiKey,
+      timeoutMs: 15000
+    }, custom || {}));
+  }
+
   async function testServer() {
     var url = $('serverUrl').value.trim().replace(/\/$/, '');
     var key = $('apiKey').value.trim();
     if (!url || !key) return toast('Inserisci URL e API Key');
     toast('Test collegamento…');
     try {
-      var res = await fetch(url + '/health', { headers: { 'X-GE360-API-Key': key } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      toast('Debian raggiungibile ✓');
+      await new BackendClient({ baseUrl: url, apiKey: key, timeoutMs: 10000 }).health();
+      toast('Backend rilievi raggiungibile ✓');
     } catch (e) {
       toast('Connessione fallita: ' + e.message);
     }
   }
 
-  async function sendPlan(id) {
-    var plan = library.find(function (p) { return p.id === id; });
-    if (!plan) return;
-    if (!settings.serverUrl || !settings.apiKey) {
-      openSettings();
-      return toast('Configura prima il Debian');
+  function setProcessingState(plan, status, error) {
+    ensureBackendMetadata(plan);
+    plan.backend.status = status;
+    plan.backend.error = error || null;
+    saveLibrary();
+    if (processedUI) processedUI.render(plan);
+    renderDashboard();
+  }
+
+  function showMissingMeasures(plan, validation) {
+    var count = validation.missingWallIds.length;
+    $('missingMeasuresText').textContent = count === 1
+      ? 'Manca la misura reale di 1 muro. Il backend non riceverà una lunghezza inventata.'
+      : 'Mancano le misure reali di ' + count + ' muri. Il backend non riceverà lunghezze inventate.';
+    $('missingMeasuresBackdrop').classList.remove('hidden');
+  }
+
+  function validateBeforeProcessing(plan) {
+    var validation = validateForProcessing(plan);
+    if (!validation.hasWalls) {
+      toast('Prima disegna la planimetria');
+      return false;
     }
-    toast('Invio al planner…');
+    if (validation.missingWallIds.length) {
+      showMissingMeasures(plan, validation);
+      return false;
+    }
+    if (validation.invalidOpeningIds.length) {
+      toast('Completa prima le misure di porte e finestre');
+      return false;
+    }
+    return true;
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  async function finalizeProcessing(plan, client, runId) {
+    if (runId !== processingRunId) return;
     try {
-      var res = await fetch(settings.serverUrl + '/plans/refine', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-GE360-API-Key': settings.apiKey },
-        body: JSON.stringify(planPayload(plan))
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      plan.backend = { sentAt: new Date().toISOString(), status: 'sent' };
-      saveLibrary();
-      renderDashboard();
-      toast('Inviato al Debian ✓');
+      var processed = await client.getProcessedPlan(plan.backend.remotePlanId);
+      applyBackendSnapshot(plan, processed || {});
     } catch (e) {
-      toast('Errore: ' + e.message);
+      // Il risultato può essere già incluso nello status. Non distruggiamo dati validi.
+      if (!plan.backend.files.svg && !plan.backend.files.png && !plan.backend.files.pdf && !plan.backend.files.plan3d && !plan.backend.files.glb) {
+        plan.backend.warnings = (plan.backend.warnings || []).concat(['Endpoint processed non disponibile: ' + e.message]);
+      }
+    }
+
+    try {
+      var versions = await client.getVersions(plan.backend.remotePlanId);
+      mergeVersions(plan, versions);
+    } catch (_) {
+      // Versioning opzionale finché il backend non lo espone.
+    }
+
+    if (plan.backend.status !== 'NEEDS_REVIEW' && plan.backend.status !== 'ERROR') plan.backend.status = 'PROCESSED';
+    if (plan.backend.status === 'PROCESSED' || plan.backend.status === 'NEEDS_REVIEW') {
+      plan.backend.sourceRevision = plan.sourceRevision;
+      plan.backend.lastProcessedAt = plan.backend.lastProcessedAt || new Date().toISOString();
+    }
+    saveLibrary();
+    if (processedUI) processedUI.render(plan);
+    renderDashboard();
+  }
+
+  async function pollProcessing(plan, client, runId) {
+    var startedAt = Date.now();
+    while (runId === processingRunId && Date.now() - startedAt < PROCESS_POLL_TIMEOUT_MS) {
+      await wait(PROCESS_POLL_MS);
+      if (runId !== processingRunId) return;
+      var snapshot = await client.getPlanStatus(plan.backend.remotePlanId);
+      applyBackendSnapshot(plan, snapshot || {});
+      saveLibrary();
+      if (processedUI) processedUI.render(plan);
+      if (isTerminalStatus(plan.backend.status)) {
+        await finalizeProcessing(plan, client, runId);
+        return;
+      }
+    }
+    if (runId === processingRunId) {
+      toast('Elaborazione ancora in corso. Lo stato resta salvato.');
     }
   }
 
-  function exportJson() {
+  async function resumeProcessing(plan) {
+    if (!plan || !plan.backend || !plan.backend.remotePlanId) return;
+    if (!['UPLOADING', 'RAW', 'QUEUED', 'PROCESSING'].includes(plan.backend.status)) return;
+    var runId = ++processingRunId;
+    var client = backendClient();
+    try {
+      var snapshot = await client.getPlanStatus(plan.backend.remotePlanId);
+      applyBackendSnapshot(plan, snapshot || {});
+      saveLibrary();
+      if (processedUI) processedUI.render(plan);
+      if (isTerminalStatus(plan.backend.status)) await finalizeProcessing(plan, client, runId);
+      else await pollProcessing(plan, client, runId);
+    } catch (e) {
+      setProcessingState(plan, 'ERROR', e.message || 'Backend non raggiungibile');
+    }
+  }
+
+  async function startProcessing(reprocess) {
+    persistActive();
+    var plan = currentPlan();
+    if (!plan) return;
+    ensureBackendMetadata(plan);
+
+    if (['UPLOADING', 'RAW', 'QUEUED', 'PROCESSING'].includes(plan.backend.status)) {
+      if (processedUI) processedUI.showTab('processed');
+      return toast('ELABORAZIONE IN CORSO');
+    }
+    if (!validateBeforeProcessing(plan)) return;
+    if (!settings.serverUrl || !settings.apiKey) {
+      openSettings();
+      return toast('CONFIGURA BACKEND RILIEVI');
+    }
+
+    var runId = ++processingRunId;
+    var client = backendClient();
+    var payload = planPayload(plan);
+    setProcessingState(plan, 'UPLOADING');
+    if (processedUI) processedUI.showTab('processed');
+
+    try {
+      var started;
+      if (reprocess && plan.backend.remotePlanId) {
+        started = await client.reprocessPlan(plan.backend.remotePlanId, payload);
+        applyBackendSnapshot(plan, started || {});
+      } else {
+        var created = await client.createPlan(payload);
+        applyBackendSnapshot(plan, created || {});
+        if (!plan.backend.remotePlanId) throw new Error('Il backend non ha restituito remotePlanId');
+        started = await client.processPlan(plan.backend.remotePlanId, { sourceRevision: plan.sourceRevision });
+        applyBackendSnapshot(plan, started || {});
+      }
+
+      if (!plan.backend.remotePlanId) throw new Error('remotePlanId mancante');
+      if (!isTerminalStatus(plan.backend.status) && plan.backend.status !== 'PROCESSING') {
+        plan.backend.status = plan.backend.status === 'RAW' ? 'QUEUED' : 'PROCESSING';
+      }
+      saveLibrary();
+      if (processedUI) processedUI.render(plan);
+
+      if (isTerminalStatus(plan.backend.status)) await finalizeProcessing(plan, client, runId);
+      else await pollProcessing(plan, client, runId);
+    } catch (e) {
+      if (runId !== processingRunId) return;
+      setProcessingState(plan, 'ERROR', e.message || 'Backend non raggiungibile');
+      if (processedUI) processedUI.showTab('processed');
+      toast('BACKEND NON RAGGIUNGIBILE · rilievo salvato');
+    }
+  }
+
+  function buildSurveyChecks() {
+    var checks = [];
+    if (!walls.length) {
+      checks.push({level:'error',text:'Nessun muro disegnato'});
+      return checks;
+    }
+
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) checks.push({level:'error',text:missing.length + ' muri senza misura reale'});
+
+    var badOpenings = openings.filter(function (o) {
+      return !Number.isFinite(o.widthCm) || o.widthCm <= 0 || !Number.isFinite(o.offsetCm) || o.offsetCm < 0;
+    });
+    if (badOpenings.length) checks.push({level:'error',text:badOpenings.length + ' porte/finestre con quote incomplete'});
+
+    var openingsOutside = openings.filter(function (o) {
+      var wall = walls.find(function (w) { return w.id === o.wallId; });
+      if (!wall || !Number.isFinite(wall.lengthCm) || !Number.isFinite(o.widthCm) || !Number.isFinite(o.offsetCm)) return false;
+      return o.offsetCm + o.widthCm > wall.lengthCm + .5;
+    });
+    if (openingsOutside.length) checks.push({level:'error',text:openingsOutside.length + ' aperture non entrano nella lunghezza del muro'});
+
+    var unnamedRooms = rooms.filter(function (room) { return room.needsNaming && !room.geometryMissing; });
+    if (unnamedRooms.length) checks.push({level:'warning',text:unnamedRooms.length + ' ambienti riconosciuti automaticamente sono ancora da nominare'});
+
+    var pendingT = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
+    if (pendingT.length) checks.push({level:'warning',text:pendingT.length + ' possibili innesti a T da controllare'});
+
+    var derivedMeasures = walls.filter(function (w) { return w.requiresMeasureVerification; });
+    if (derivedMeasures.length) {
+      checks.push({
+        level:'warning',
+        text:derivedMeasures.length + ' quote di segmenti T sono stimate dalla posizione dello schizzo: verificarle sul posto'
+      });
+    }
+
+    var faces = buildFaces(walls);
+    rooms.forEach(function (room) {
+      if (!matchRoomFace(room, faces)) {
+        checks.push({level:'warning',text:'Ambiente “' + (room.name || 'senza nome') + '” non è riconosciuto come superficie chiusa'});
+      }
+    });
+
+    notes.forEach(function (note) {
+      if (!noteAnchor(note)) checks.push({level:'warning',text:'Un intervento non è più collegato a un elemento esistente'});
+    });
+
+    if (!missing.length) {
+      try {
+        var result = solveFloorPlan(solverInput(), {mode:'normal',maxClosureGapCm:10});
+        (result.errors || []).slice(0,3).forEach(function (err) {
+          checks.push({level:'error',text:err.message || 'Errore geometrico'});
+        });
+        if (result.stats && result.stats.componentCount > 1) {
+          checks.push({level:'warning',text:result.stats.componentCount + ' gruppi di muri risultano scollegati'});
+        }
+        if (result.stats && result.stats.loopCount > 0 && result.closure && !result.closure.closed) {
+          checks.push({level:'error',text:'La planimetria contiene loop che non chiudono con le misure inserite'});
+        } else if (result.stats && result.stats.loopCount === 0) {
+          checks.push({level:'warning',text:'Nessun ambiente completamente chiuso rilevato'});
+        }
+      } catch (e) {
+        checks.push({level:'warning',text:'Controllo geometrico non completato: ' + (e.message || e)});
+      }
+    }
+
+    return checks;
+  }
+
+  function closeFinishCheck() {
+    $('finishCheckBackdrop').classList.add('hidden');
+  }
+
+  function openFinishCheck() {
+    persistActive();
+    autoRepairTJunctions();
+    var checks = buildSurveyChecks();
+    var errors = checks.filter(function (x) { return x.level === 'error'; }).length;
+    var warnings = checks.filter(function (x) { return x.level === 'warning'; }).length;
+    var title = $('finishCheckTitle');
+    var summaryEl = $('finishCheckSummary');
+    var list = $('finishCheckList');
+    list.innerHTML = '';
+
+    if (!checks.length) {
+      title.textContent = 'Rilievo pronto ✓';
+      summaryEl.className = 'finish-check-summary ok';
+      summaryEl.textContent = 'Misure complete, geometria coerente e nessun problema importante rilevato.';
+    } else {
+      title.textContent = errors ? 'Da correggere prima possibile' : 'Rilievo con avvisi';
+      summaryEl.className = 'finish-check-summary ' + (errors ? 'error' : 'warn');
+      summaryEl.textContent = errors + ' errori · ' + warnings + ' avvisi';
+      checks.forEach(function (item) {
+        var row = document.createElement('div');
+        row.className = 'finish-check-row ' + item.level;
+        row.textContent = (item.level === 'error' ? '✕ ' : '⚠ ') + item.text;
+        list.appendChild(row);
+      });
+    }
+
+    $('exportFinishCheckBtn').textContent = checks.length ? 'SALVA BOZZA JSON' : 'RILIEVO PRONTO · ESPORTA';
+    $('finishCheckBackdrop').classList.remove('hidden');
+  }
+
+  function exportJson(force) {
     persistActive();
     var plan = currentPlan();
     if (!plan || !plan.walls || !plan.walls.length) return toast('Prima fai uno schizzo');
     var missing = plan.walls.filter(function (w) { return !w.lengthCm; }).length;
-    if (missing) {
+    if (missing && !force) {
       toast('Mancano ' + missing + ' misure');
       return openNextMissing();
     }
@@ -1904,6 +3567,187 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     a.download = 'GE360-' + (plan.name || 'rilievo').replace(/[^a-z0-9_-]+/gi, '-') + '.json';
     a.click();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function renderTakeoff() {
+    var cache = surfaceCache || refreshSurfaceCache();
+    var takeoff = buildProgressiveTakeoff({
+      notes:notes,
+      walls:walls,
+      openings:openings,
+      rooms:rooms,
+      surfaceCache:cache,
+      wallHeightM:wallHeightM
+    });
+
+    var summaryEl = $('takeoffSummary');
+    summaryEl.innerHTML =
+      '<b>' + takeoff.rows.length + ' lavorazioni quantificate</b>' +
+      '<span>' + takeoff.totals.interventions + ' interventi strutturati' +
+      (takeoff.unresolved.length ? ' · ' + takeoff.unresolved.length + ' da completare' : '') + '</span>';
+
+    var rowsEl = $('takeoffRows');
+    rowsEl.innerHTML = '';
+    takeoff.rows.forEach(function (row) {
+      var item = document.createElement('div');
+      item.className = 'takeoff-row ' + row.category;
+      var left = document.createElement('div');
+      left.className = 'takeoff-row-main';
+      var title = document.createElement('b');
+      title.textContent = row.label;
+      var detail = document.createElement('span');
+      var roomsText = row.rooms && row.rooms.length ? row.rooms.join(', ') : row.targets + ' elementi';
+      detail.textContent = roomsText;
+      left.appendChild(title);
+      left.appendChild(detail);
+      var value = document.createElement('div');
+      value.className = 'takeoff-value';
+      value.textContent = (row.estimated ? '≈ ' : '') +
+        (row.unit === 'cad' ? String(row.value) : row.value.toFixed(2).replace('.', ',')) +
+        ' ' + row.unit;
+      item.appendChild(left);
+      item.appendChild(value);
+      rowsEl.appendChild(item);
+    });
+
+    var unresolvedEl = $('takeoffUnresolved');
+    unresolvedEl.innerHTML = '';
+    unresolvedEl.classList.toggle('hidden', !takeoff.unresolved.length);
+    if (takeoff.unresolved.length) {
+      var head = document.createElement('b');
+      head.textContent = 'DA COMPLETARE';
+      unresolvedEl.appendChild(head);
+      takeoff.unresolved.slice(0,12).forEach(function (u) {
+        var row = document.createElement('div');
+        row.textContent = '• ' + u.label + (u.targetLabel ? ' · ' + u.targetLabel : '');
+        unresolvedEl.appendChild(row);
+      });
+    }
+
+    var plan = currentPlan();
+    if (plan) plan.takeoff = clone(takeoff);
+    return takeoff;
+  }
+
+  function openTakeoff() {
+    closeTools();
+    renderTakeoff();
+    $('takeoffBackdrop').classList.remove('hidden');
+  }
+
+  function closeTakeoff() {
+    $('takeoffBackdrop').classList.add('hidden');
+  }
+
+  function backupReasonLabel(reason) {
+    if (reason==='manual') return 'MANUALE';
+    if (reason==='before-restore') return 'PRIMA DEL RIPRISTINO';
+    return 'AUTOMATICO';
+  }
+
+  async function renderBackups() {
+    var list=$('backupList');
+    list.innerHTML='';
+    if (!activePlanId) return;
+    try {
+      var backups=await listPlanBackups(activePlanId);
+      if (!backups.length) {
+        var empty=document.createElement('div');
+        empty.className='backup-empty';
+        empty.textContent='Nessun backup ancora. Verranno creati automaticamente quando modifichi il rilievo.';
+        list.appendChild(empty);
+        return;
+      }
+
+      backups.forEach(function (backup,index) {
+        var row=document.createElement('div');
+        row.className='backup-row';
+        var info=document.createElement('div');
+        info.className='backup-row-info';
+        var title=document.createElement('b');
+        title.textContent=(index===0 ? 'ULTIMA VERSIONE · ' : '')+backupReasonLabel(backup.reason);
+        var meta=document.createElement('span');
+        meta.textContent=new Date(backup.createdAt).toLocaleString('it-IT',{
+          day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'
+        });
+        info.appendChild(title);
+        info.appendChild(meta);
+
+        var restore=document.createElement('button');
+        restore.type='button';
+        restore.textContent='RIPRISTINA';
+        restore.addEventListener('click',function () { restoreBackup(backup.id); });
+
+        row.appendChild(info);
+        row.appendChild(restore);
+        list.appendChild(row);
+      });
+    } catch (e) {
+      var err=document.createElement('div');
+      err.className='backup-empty';
+      err.textContent='Backup non disponibili: '+(e.message || e);
+      list.appendChild(err);
+    }
+  }
+
+  async function openBackups() {
+    closeTools();
+    $('backupsBackdrop').classList.remove('hidden');
+    await renderBackups();
+  }
+
+  function closeBackups() {
+    $('backupsBackdrop').classList.add('hidden');
+  }
+
+  async function createManualBackup() {
+    var plan=currentPlan();
+    if (!plan) return;
+    persistActive();
+    try {
+      await createPlanBackup(plan,'manual');
+      await renderBackups();
+      toast('Backup creato ✓');
+    } catch (e) {
+      toast('Backup non creato · '+(e.message || 'errore'));
+    }
+  }
+
+  async function restoreBackup(backupId) {
+    var plan=currentPlan();
+    if (!plan) return;
+    if (!confirm('Ripristinare questa versione del rilievo?\nLa versione attuale verrà salvata prima del ripristino.')) return;
+    try {
+      persistActive();
+      await createPlanBackup(plan,'before-restore');
+      var backup=await getPlanBackup(backupId);
+      if (!backup || !backup.snapshot) throw new Error('Snapshot non trovato');
+
+      var restored=clone(backup.snapshot);
+      restored.id=plan.id;
+      restored.updatedAt=new Date().toISOString();
+      if (restored.siteId && !sites.some(function (site) { return String(site.id)===String(restored.siteId); })) {
+        restored.siteId=null;
+        restored.site=null;
+      }
+      ensureBackendMetadata(restored);
+      if (restored.backend) {
+        restored.backend.status='LOCAL';
+        restored.backend.jobId=null;
+        restored.backend.error=null;
+      }
+      refreshSourceRevision(restored);
+
+      var idx=library.findIndex(function (p) { return String(p.id)===String(plan.id); });
+      if (idx<0) throw new Error('Rilievo non trovato');
+      library[idx]=restored;
+      saveLibrary();
+      closeBackups();
+      openPlan(restored.id);
+      toast('Backup ripristinato ✓');
+    } catch (e) {
+      toast('Ripristino non riuscito · '+(e.message || 'errore'));
+    }
   }
 
   function openTools() {
@@ -1924,6 +3768,16 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   function clearAll() {
     if (!confirm('Cancellare tutto il disegno di questo rilievo?')) return;
     checkpoint();
+    photoRefs.forEach(function (photo) {
+      if (photo.targetType === 'plan') return;
+      photo.orphaned = true;
+      photo.originalTargetType = photo.targetType;
+      photo.originalTargetId = photo.targetId;
+      photo.targetType = 'plan';
+      photo.targetId = activePlanId || '';
+      photo.targetLabel = 'SCOLLEGATA · disegno cancellato';
+      photo.roomName = null;
+    });
     rawStrokes = [];
     walls = [];
     openings = [];
@@ -1938,22 +3792,62 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     render();
   }
 
+  function setEditorLayer(layer, announce) {
+    editorLayer = layer === 'works' ? 'works' : 'survey';
+    $('surveyViewBtn').classList.toggle('active', editorLayer === 'survey');
+    $('worksViewBtn').classList.toggle('active', editorLayer === 'works');
+    hideObjectActionBar();
+    persistActive();
+    render();
+    if (announce !== false) toast(editorLayer === 'works' ? 'Vista interventi' : 'Vista rilievo');
+  }
+
   function updateUI() {
     var has = walls.length > 0;
     $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
     $('statusPill').classList.toggle('hidden', !has);
+    $('stageModeToggle').classList.toggle('hidden', !has);
+    $('surveyViewBtn').classList.toggle('active', editorLayer === 'survey');
+    $('worksViewBtn').classList.toggle('active', editorLayer === 'works');
     $('toolsBtn').classList.toggle('hidden', !has);
     $('clearBtn').classList.toggle('hidden', !has);
     $('solvePlanBtn').classList.toggle('hidden', !has);
+    $('elaborateBtn').classList.toggle('hidden', !has);
     $('roomBtn').classList.toggle('hidden', !has);
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
     $('notesBtn').classList.toggle('hidden', !has);
+    $('photosBtn').classList.toggle('hidden', !has);
+    $('takeoffBtn').classList.toggle('hidden', !has);
+    $('siteBtn').classList.toggle('hidden', !has);
+    $('backupsBtn').classList.toggle('hidden', !has);
+    var linkedSite=currentSite();
+    $('currentSiteBadge').classList.toggle('hidden',!linkedSite);
+    $('currentSiteBadge').textContent=linkedSite ? '🏗️ '+siteLabel(linkedSite)+' · '+statusLabel(linkedSite.status) : '';
     var notesTitle = $('notesBtn').querySelector('b');
-    if (notesTitle) notesTitle.textContent = 'APPUNTI' + (notes.length ? ' · ' + notes.length : '');
+    if (notesTitle) notesTitle.textContent = 'INTERVENTI' + (notes.length ? ' · ' + notes.length : '');
+    var photosTitle = $('photosBtn').querySelector('b');
+    if (photosTitle) photosTitle.textContent = 'FOTO' + (photoRefs.length ? ' · ' + photoRefs.length : '');
+    var takeoffTitle = $('takeoffBtn').querySelector('b');
+    if (takeoffTitle) {
+      var takeoffNow = buildProgressiveTakeoff({
+        notes:notes,walls:walls,openings:openings,rooms:rooms,
+        surfaceCache:surfaceCache,wallHeightM:wallHeightM
+      });
+      takeoffTitle.textContent = 'COMPUTO LIVE' + (takeoffNow.rows.length ? ' · ' + takeoffNow.rows.length : '');
+    }
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
-    $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
-    $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
+    var derived = walls.filter(function (w) { return w.requiresMeasureVerification; }).length;
+    var unnamedRooms = rooms.filter(function (room) { return room.needsNaming && !room.geometryMissing; }).length;
+    $('statusPill').textContent = walls.length + ' muri · ' +
+      (missing ? missing + ' da misurare' : derived ? derived + ' quote da verificare' : 'misure complete ✓') +
+      (unnamedRooms ? ' · ' + unnamedRooms + ' ambienti da nominare' : '');
+    $('measureLabel').textContent = missing
+      ? 'MISURE ' + missing
+      : derived
+        ? 'MISURE ⚠ ' + derived
+        : 'MISURE ✓';
+    updateHistoryButtons();
   }
 
   function drawPolyline(points, color, width) {
@@ -1974,27 +3868,32 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     ctx.restore();
   }
 
-  function roundRect(x, y, w, h, r) {
+  function roundRectPath(gctx, x, y, w, h, r) {
     var rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
+    gctx.beginPath();
+    gctx.moveTo(x + rr, y);
+    gctx.arcTo(x + w, y, x + w, y + h, rr);
+    gctx.arcTo(x + w, y + h, x, y + h, rr);
+    gctx.arcTo(x, y + h, x, y, rr);
+    gctx.arcTo(x, y, x + w, y, rr);
+    gctx.closePath();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    roundRectPath(ctx, x, y, w, h, r);
   }
 
   function drawMeasure(wall) {
     var mid = worldToScreen({ x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 });
     var x = mid.x;
     var y = mid.y;
-    var text = wall.lengthCm ? (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
+    var derived = wall.measurementSource === 'derived_t_split' || wall.requiresMeasureVerification;
+    var text = wall.lengthCm ? (derived ? '≈ ' : '') + (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
     ctx.save();
     ctx.font = '900 13px system-ui';
     var width = Math.max(42, ctx.measureText(text).width + 16);
-    ctx.fillStyle = wall.lengthCm ? '#fff' : '#fef3c7';
-    ctx.strokeStyle = wall.lengthCm ? '#cbd5e1' : '#f59e0b';
+    ctx.fillStyle = !wall.lengthCm || derived ? '#fef3c7' : '#fff';
+    ctx.strokeStyle = !wall.lengthCm || derived ? '#f59e0b' : '#cbd5e1';
     ctx.lineWidth = 2;
     roundRect(x - width / 2, y - 18, width, 36, 12);
     ctx.fill();
@@ -2006,30 +3905,120 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     ctx.restore();
   }
 
+  function wallPointAt(wall, t) {
+    return {
+      x: wall.a.x + (wall.b.x - wall.a.x) * t,
+      y: wall.a.y + (wall.b.y - wall.a.y) * t
+    };
+  }
+
+  function drawOpeningSymbol(gctx, opening, wall, transform, options) {
+    options = options || {};
+    var interval = openingInterval(opening, wall);
+    if (!interval) return;
+
+    var a = transform(wallPointAt(wall, interval.startT));
+    var b = transform(wallPointAt(wall, interval.endT));
+    var dx = b.x - a.x;
+    var dy = b.y - a.y;
+    var gapPx = Math.hypot(dx, dy);
+    if (!Number.isFinite(gapPx) || gapPx < 3) return;
+
+    var ux = dx / gapPx;
+    var uy = dy / gapPx;
+    var nx = -uy;
+    var ny = ux;
+    var wallWidth = options.wallWidth || 8;
+    var bg = options.background || '#f8fafc';
+    var color = opening.type === 'door' ? '#16a34a' : '#0891b2';
+    var side = opening.swingSide === -1 ? -1 : 1;
+
+    gctx.save();
+
+    // Cancella davvero il tratto di muro: la porta/finestra è un'apertura,
+    // non un bollino sovrapposto.
+    gctx.strokeStyle = bg;
+    gctx.lineWidth = wallWidth + 5;
+    gctx.lineCap = 'butt';
+    gctx.beginPath();
+    gctx.moveTo(a.x - ux * 1.5, a.y - uy * 1.5);
+    gctx.lineTo(b.x + ux * 1.5, b.y + uy * 1.5);
+    gctx.stroke();
+
+    // Spallette ai lati dell'apertura.
+    gctx.strokeStyle = '#0f172a';
+    gctx.lineWidth = 2;
+    var jamb = Math.max(4, wallWidth * .75);
+    [a, b].forEach(function (p) {
+      gctx.beginPath();
+      gctx.moveTo(p.x - nx * jamb, p.y - ny * jamb);
+      gctx.lineTo(p.x + nx * jamb, p.y + ny * jamb);
+      gctx.stroke();
+    });
+
+    if (opening.type === 'door') {
+      var hinge = a;
+      var leafEnd = {
+        x: hinge.x + nx * gapPx * side,
+        y: hinge.y + ny * gapPx * side
+      };
+      gctx.strokeStyle = color;
+      gctx.lineWidth = 2.5;
+      gctx.beginPath();
+      gctx.moveTo(hinge.x, hinge.y);
+      gctx.lineTo(leafEnd.x, leafEnd.y);
+      gctx.stroke();
+
+      var theta = Math.atan2(dy, dx);
+      gctx.globalAlpha = .72;
+      gctx.lineWidth = 1.5;
+      gctx.beginPath();
+      gctx.arc(hinge.x, hinge.y, gapPx, theta, theta + side * Math.PI / 2, side < 0);
+      gctx.stroke();
+      gctx.globalAlpha = 1;
+    } else {
+      // Simbolo finestra: due linee parallele nel vano.
+      gctx.strokeStyle = color;
+      gctx.lineWidth = 2;
+      [-3, 3].forEach(function (off) {
+        gctx.beginPath();
+        gctx.moveTo(a.x + nx * off, a.y + ny * off);
+        gctx.lineTo(b.x + nx * off, b.y + ny * off);
+        gctx.stroke();
+      });
+    }
+
+    if (options.showLabel !== false) {
+      var cx = (a.x + b.x) / 2;
+      var cy = (a.y + b.y) / 2;
+      var offset = opening.type === 'door' ? 14 * side : 15;
+      var label = (opening.type === 'door' ? 'P ' : 'F ') +
+        (Number.isFinite(opening.widthCm) ? (opening.widthCm / 100).toFixed(2).replace('.', ',') : '');
+      gctx.font = '900 ' + (options.compact ? 8 : 9) + 'px system-ui';
+      gctx.textAlign = 'center';
+      gctx.textBaseline = 'middle';
+      var tw = gctx.measureText(label).width + 8;
+      var lx = cx + nx * offset;
+      var ly = cy + ny * offset;
+      gctx.fillStyle = 'rgba(255,255,255,.95)';
+      roundRectPath(gctx, lx - tw / 2, ly - 8, tw, 16, 6);
+      gctx.fill();
+      gctx.fillStyle = color;
+      gctx.fillText(label, lx, ly + .5);
+    }
+
+    gctx.restore();
+  }
+
   function drawOpening(opening) {
     var wall = walls.find(function (w) { return w.id === opening.wallId; });
     if (!wall) return;
-    var wp = {
-      x: wall.a.x + (wall.b.x - wall.a.x) * opening.position,
-      y: wall.a.y + (wall.b.y - wall.a.y) * opening.position
-    };
-    var openingScreen = worldToScreen(wp);
-    var x = openingScreen.x;
-    var y = openingScreen.y;
-    ctx.save();
-    ctx.fillStyle = opening.type === 'door' ? '#22c55e' : '#06b6d4';
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(x, y, 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = '900 12px system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(opening.type === 'door' ? 'P' : 'F', x, y + 1);
-    ctx.restore();
+
+    drawOpeningSymbol(ctx, opening, wall, worldToScreen, {
+      wallWidth: wall.id === selectedWallId ? 10 : 8,
+      background: '#f8fafc',
+      showLabel: true
+    });
 
     if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
       var cornerWorld = opening.referenceEnd === 'b' ? wall.b : wall.a;
@@ -2052,53 +4041,406 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     }
   }
 
-  function noteAnchor(note) {
+  function noteAnchorForGeometry(note, wallList, openingList, roomList, faces) {
     if (!note) return null;
 
     if (note.targetType === 'wall') {
-      var wall = walls.find(function (w) { return w.id === note.targetId; });
+      var wall = (wallList || []).find(function (w) { return w.id === note.targetId; });
       if (!wall) return null;
-      return { x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 };
+      return { x:(wall.a.x + wall.b.x) / 2, y:(wall.a.y + wall.b.y) / 2 };
     }
 
     if (note.targetType === 'opening') {
-      var opening = openings.find(function (o) { return o.id === note.targetId; });
-      return opening ? openingWorldPoint(opening) : null;
+      var opening = (openingList || []).find(function (o) { return o.id === note.targetId; });
+      if (!opening) return null;
+      var ow = (wallList || []).find(function (w) { return w.id === opening.wallId; });
+      return ow ? openingWorldPoint(opening, ow) : null;
     }
 
-    var faces = buildFaces(walls);
-    var room = rooms.find(function (r) { return r.id === note.targetId; });
+    var room = (roomList || []).find(function (r) { return r.id === note.targetId; });
     var face = room
-      ? matchRoomFace(room, faces)
-      : faces.find(function (f) { return faceKey(f) === note.targetId; });
+      ? matchRoomFace(room, faces || [])
+      : (faces || []).find(function (f) { return faceKey(f) === note.targetId; });
     return face ? face.centroid : null;
   }
 
-  function drawNoteMarkers() {
+  function noteAnchor(note) {
+    return noteAnchorForGeometry(note, walls, openings, rooms, buildFaces(walls));
+  }
+
+  function interventionColor(note) {
+    var first = normalizeWorkItems(note && note.workItems)[0];
+    var category = first ? first.category : 'general';
+    if (category === 'demolition') return '#dc2626';
+    if (category === 'construction') return '#2563eb';
+    if (category === 'finish') return '#d97706';
+    return '#7c3aed';
+  }
+
+  function interventionText(note) {
+    var items = normalizeWorkItems(note && note.workItems);
+    var base = items.length
+      ? items.map(function (x) { return x.label; }).join(' · ')
+      : String((note && (note.cleanedText || note.rawText)) || 'INTERVENTO').trim();
+    if (!note) return base;
+
+    var prefix = '';
+    if (note.targetType === 'wall') prefix = String(note.targetLabel || 'MURO').split('·')[0].trim();
+    else if (note.targetType === 'floor') prefix = 'PAVIMENTO';
+    else if (note.targetType === 'ceiling') prefix = 'SOFFITTO';
+    else if (note.targetType === 'opening') prefix = String(note.targetLabel || 'APERTURA').split('·')[0].trim();
+    else if (note.targetType === 'room' && note.roomName) prefix = String(note.roomName);
+
+    return prefix ? prefix.toUpperCase() + ' · ' + base : base;
+  }
+
+  function wrapAnnotationText(gctx, text, maxWidth, maxLines) {
+    var words = String(text || '').split(/\s+/).filter(Boolean);
+    var lines = [];
+    var line = '';
+    words.forEach(function (word) {
+      if (lines.length >= maxLines) return;
+      var next = line ? line + ' ' + word : word;
+      if (line && gctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+    });
+    if (line && lines.length < maxLines) lines.push(line);
+    if (words.length && lines.length === maxLines) {
+      var joined = lines.join(' ');
+      if (joined.length < text.length) lines[maxLines - 1] = lines[maxLines - 1].replace(/[.…]*$/, '') + '…';
+    }
+    return lines.length ? lines : ['INTERVENTO'];
+  }
+
+  function annotationBoxesOverlap(a, b, pad) {
+    pad = Number.isFinite(pad) ? pad : 5;
+    return !(a.x + a.w + pad <= b.x || b.x + b.w + pad <= a.x ||
+      a.y + a.h + pad <= b.y || b.y + b.h + pad <= a.y);
+  }
+
+  function chooseAnnotationPosition(anchor, preferred, boxW, boxH, occupied, bounds) {
+    var tries = [
+      preferred,
+      {x:anchor.x, y:anchor.y-58},
+      {x:anchor.x+70, y:anchor.y-42},
+      {x:anchor.x-70, y:anchor.y-42},
+      {x:anchor.x+78, y:anchor.y+10},
+      {x:anchor.x-78, y:anchor.y+10},
+      {x:anchor.x, y:anchor.y+62},
+      {x:anchor.x+74, y:anchor.y+58},
+      {x:anchor.x-74, y:anchor.y+58},
+      {x:anchor.x, y:anchor.y-100}
+    ];
+    var margin = 8;
+    var fallback = preferred;
+
+    for (var i=0;i<tries.length;i++) {
+      var c = tries[i];
+      var cx = Math.max(margin + boxW/2, Math.min(bounds.w-margin-boxW/2, c.x));
+      var cy = Math.max(margin + boxH/2, Math.min(bounds.h-margin-boxH/2, c.y));
+      var box = {x:cx-boxW/2,y:cy-boxH/2,w:boxW,h:boxH};
+      if (!(occupied || []).some(function (other) { return annotationBoxesOverlap(box, other, 5); })) {
+        return {x:cx,y:cy,box:box};
+      }
+      fallback = {x:cx,y:cy};
+    }
+
+    return {
+      x:fallback.x,
+      y:fallback.y,
+      box:{x:fallback.x-boxW/2,y:fallback.y-boxH/2,w:boxW,h:boxH}
+    };
+  }
+
+  function drawInterventionAnnotation(gctx, note, anchorScreen, options) {
+    options = options || {};
+    var style = noteDisplayStyle(note && note.displayStyle);
+    var color = interventionColor(note);
+    var text = interventionText(note);
+    var compact = !!options.compact;
+    var fontSize = compact ? 8 : 9;
+    var maxWidth = compact ? 116 : 150;
+    var maxLines = compact ? 2 : 3;
+    var offsetX = note.targetType === 'wall' || note.targetType === 'opening' ? 40 : 0;
+    var offsetY = note.targetType === 'ceiling' ? -42 : note.targetType === 'floor' ? 42 : -34;
+
+    gctx.save();
+    gctx.font = '900 ' + fontSize + 'px system-ui';
+    var lines = wrapAnnotationText(gctx, text.toUpperCase(), maxWidth, maxLines);
+    var lineH = compact ? 11 : 12;
+    var textW = Math.min(maxWidth, Math.max.apply(Math, lines.map(function (line) { return gctx.measureText(line).width; })));
+    var boxW = textW + (compact ? 10 : 14);
+    var boxH = lines.length * lineH + (compact ? 8 : 12);
+
+    var preferred = {x:anchorScreen.x+offsetX,y:anchorScreen.y+offsetY};
+    if (options.manualOffsetScreen) {
+      preferred = {
+        x:anchorScreen.x + options.manualOffsetScreen.x,
+        y:anchorScreen.y + options.manualOffsetScreen.y
+      };
+    }
+
+    var placement;
+    if (options.manualOffsetScreen || !options.bounds) {
+      placement = {
+        x:preferred.x,
+        y:preferred.y,
+        box:{x:preferred.x-boxW/2,y:preferred.y-boxH/2,w:boxW,h:boxH}
+      };
+    } else {
+      placement = chooseAnnotationPosition(
+        anchorScreen,
+        preferred,
+        boxW,
+        boxH,
+        options.occupied || [],
+        options.bounds
+      );
+    }
+
+    var labelX = placement.x;
+    var labelY = placement.y;
+
+    if (style === 'callout') {
+      gctx.strokeStyle = color;
+      gctx.lineWidth = compact ? 1.2 : 1.6;
+      gctx.beginPath();
+      gctx.moveTo(anchorScreen.x, anchorScreen.y);
+      gctx.lineTo(labelX, labelY);
+      gctx.stroke();
+
+      gctx.fillStyle = color;
+      gctx.beginPath();
+      gctx.arc(anchorScreen.x, anchorScreen.y, compact ? 2.5 : 3.5, 0, Math.PI * 2);
+      gctx.fill();
+    }
+
+    gctx.fillStyle = style === 'text' ? 'rgba(255,255,255,.82)' : 'rgba(255,255,255,.96)';
+    gctx.strokeStyle = color;
+    gctx.lineWidth = style === 'text' ? 1 : 1.5;
+    roundRectPath(gctx, placement.box.x, placement.box.y, boxW, boxH, compact ? 5 : 7);
+    gctx.fill();
+    gctx.stroke();
+
+    gctx.fillStyle = color;
+    gctx.textAlign = 'center';
+    gctx.textBaseline = 'middle';
+    lines.forEach(function (line, i) {
+      var yy = labelY + (i - (lines.length - 1) / 2) * lineH;
+      gctx.fillText(line, labelX, yy);
+    });
+    gctx.restore();
+
+    if (options.occupied) options.occupied.push(placement.box);
+    return {
+      x:placement.box.x,
+      y:placement.box.y,
+      w:boxW,
+      h:boxH,
+      center:{x:labelX,y:labelY},
+      anchor:{x:anchorScreen.x,y:anchorScreen.y}
+    };
+  }
+
+  function workCodes(note) {
+    return normalizeWorkItems(note && note.workItems).map(function (x) { return x.code; });
+  }
+
+  function wallInterventionStyle(wall) {
+    var related = notes.filter(function (n) { return n.targetType === 'wall' && n.targetId === wall.id; });
+    var codes = [];
+    var categories = [];
+    related.forEach(function (n) {
+      normalizeWorkItems(n.workItems).forEach(function (item) {
+        codes.push(item.code);
+        categories.push(item.category);
+      });
+    });
+    if (codes.indexOf('wall_demolish') !== -1 || categories.indexOf('demolition') !== -1) {
+      return {color:'#dc2626',width:7,dash:[10,7]};
+    }
+    if (codes.some(function (c) { return c === 'wall_new' || c === 'wall_drywall' || c === 'wall_opening_new' || c === 'wall_opening_close'; }) ||
+        categories.indexOf('construction') !== -1) {
+      return {color:'#2563eb',width:8,dash:[]};
+    }
+    if (codes.indexOf('wall_tile') !== -1 || codes.indexOf('wall_plaster_paint') !== -1 || categories.indexOf('finish') !== -1) {
+      return {color:'#d97706',width:7,dash:[3,4]};
+    }
+    return {color:'#64748b',width:6,dash:[]};
+  }
+
+  function interventionFaceForNote(note, faces) {
+    var room = rooms.find(function (r) { return r.id === note.targetId; });
+    if (room) return matchRoomFace(room, faces);
+    return faces.find(function (f) { return faceKey(f) === note.targetId; }) || null;
+  }
+
+  function drawInterventionSurfaces() {
+    var faces = buildFaces(walls);
     notes.forEach(function (note) {
-      var anchor = noteAnchor(note);
-      if (!anchor) return;
-      var p = worldToScreen(anchor);
-      var oy = note.targetType === 'floor' ? 24 : note.targetType === 'ceiling' ? -24 : 0;
-      var ox = note.targetType === 'room' ? 26 : note.targetType === 'wall' ? 18 : 0;
-      p.x += ox;
-      p.y += oy;
+      if (['floor','ceiling','room'].indexOf(note.targetType) === -1) return;
+      var face = interventionFaceForNote(note, faces);
+      if (!face || !face.polygon || face.polygon.length < 3) return;
+      var items = normalizeWorkItems(note.workItems);
+      if (!items.length) return;
+      var color = interventionColor(note);
 
       ctx.save();
-      ctx.fillStyle = '#f59e0b';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+      face.polygon.forEach(function (p,i) {
+        var sp = worldToScreen(p);
+        if (!i) ctx.moveTo(sp.x,sp.y); else ctx.lineTo(sp.x,sp.y);
+      });
+      ctx.closePath();
+
+      if (note.targetType === 'ceiling') {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([7,5]);
+        ctx.stroke();
+        ctx.restore();
+        return;
+      }
+
+      ctx.globalAlpha = .08;
+      ctx.fillStyle = color;
       ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '1000 8px system-ui';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('N', p.x, p.y + .5);
+      ctx.globalAlpha = 1;
+      ctx.clip();
+
+      var step = 18;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = .28;
+      ctx.lineWidth = 1;
+      var size = canvas.clientWidth + canvas.clientHeight;
+      for (var x=-canvas.clientHeight;x<size;x+=step) {
+        ctx.beginPath();
+        ctx.moveTo(x,0);
+        ctx.lineTo(x+canvas.clientHeight,canvas.clientHeight);
+        ctx.stroke();
+      }
       ctx.restore();
     });
+  }
+
+  function drawNoteMarkers() {
+    annotationHitBoxes = [];
+    var faces = buildFaces(walls);
+    var occupied = [];
+    var bounds = {w:canvas.clientWidth,h:canvas.clientHeight};
+
+    notes.forEach(function (note) {
+      var anchorWorld = noteAnchorForGeometry(note, walls, openings, rooms, faces);
+      if (!anchorWorld) return;
+      var anchor = worldToScreen(anchorWorld);
+      var manual = null;
+      if (note.labelOffset && Number.isFinite(note.labelOffset.x) && Number.isFinite(note.labelOffset.y)) {
+        var shifted = worldToScreen({
+          x:anchorWorld.x + note.labelOffset.x,
+          y:anchorWorld.y + note.labelOffset.y
+        });
+        manual = {x:shifted.x-anchor.x,y:shifted.y-anchor.y};
+      }
+      var hit = drawInterventionAnnotation(ctx, note, anchor, {
+        compact:false,
+        occupied:occupied,
+        bounds:bounds,
+        manualOffsetScreen:manual
+      });
+      if (hit) annotationHitBoxes.push(Object.assign({noteId:note.id}, hit));
+    });
+  }
+
+  function drawDirectionalPhotos() {
+    photoRefs.forEach(function (photo, index) {
+      if (!photo || !photo.cameraPoint || !photo.targetPoint) return;
+      if (!Number.isFinite(photo.cameraPoint.x) || !Number.isFinite(photo.cameraPoint.y) ||
+          !Number.isFinite(photo.targetPoint.x) || !Number.isFinite(photo.targetPoint.y)) return;
+
+      var a=worldToScreen(photo.cameraPoint);
+      var b=worldToScreen(photo.targetPoint);
+      var dx=b.x-a.x, dy=b.y-a.y;
+      var len=Math.hypot(dx,dy);
+      if (!(len>3)) return;
+      var ux=dx/len, uy=dy/len;
+      var arrowLen=Math.min(len,58);
+      var ex=a.x+ux*arrowLen, ey=a.y+uy*arrowLen;
+
+      ctx.save();
+      ctx.strokeStyle='#7c3aed';
+      ctx.fillStyle='#7c3aed';
+      ctx.lineWidth=2;
+      ctx.setLineDash([5,4]);
+      ctx.beginPath();
+      ctx.moveTo(a.x,a.y);
+      ctx.lineTo(ex,ey);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      var ah=8;
+      ctx.beginPath();
+      ctx.moveTo(ex,ey);
+      ctx.lineTo(ex-ux*ah-uy*ah*.55,ey-uy*ah+ux*ah*.55);
+      ctx.lineTo(ex-ux*ah+uy*ah*.55,ey-uy*ah-ux*ah*.55);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle='#ffffff';
+      ctx.strokeStyle='#7c3aed';
+      ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.arc(a.x,a.y,12,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle='#7c3aed';
+      ctx.font='1000 10px system-ui';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.fillText('📷',a.x,a.y+.5);
+
+      ctx.fillStyle='#7c3aed';
+      ctx.font='900 8px system-ui';
+      ctx.fillText(String(index+1),a.x,a.y+20);
+      ctx.restore();
+    });
+  }
+
+  async function commitPhotoPlacement(p) {
+    if (!pendingPhotoPlacement) return false;
+    var pending=pendingPhotoPlacement;
+    var ref=photoRefs.find(function (photo) { return photo.id===pending.photoId; });
+    pendingPhotoPlacement=null;
+    $('photoPlacementBanner').classList.add('hidden');
+    if (!ref || !pending.targetPoint) {
+      toast('Foto salvata senza direzione');
+      return true;
+    }
+
+    var cameraPoint={x:p.x,y:p.y};
+    var targetPoint={x:pending.targetPoint.x,y:pending.targetPoint.y};
+    var directionDeg=(Math.atan2(targetPoint.y-cameraPoint.y,targetPoint.x-cameraPoint.x)*180/Math.PI+360)%360;
+    ref.cameraPoint=cameraPoint;
+    ref.targetPoint=targetPoint;
+    ref.directionDeg=directionDeg;
+
+    try {
+      await updatePhotoMetadata(ref.id,{
+        cameraPoint:cameraPoint,
+        targetPoint:targetPoint,
+        directionDeg:directionDeg
+      });
+    } catch (_) {}
+
+    persistActive();
+    updateUI();
+    render();
+    vibrate(22);
+    toast('Direzione foto salvata ✓');
+    return true;
   }
 
   function render() {
@@ -2110,11 +4452,19 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     ctx.fillRect(0, 0, w, h);
 
     drawRoomAreas();
-    rawStrokes.forEach(function (s) { drawPolyline(s.raw, '#cbd5e1', 3); });
+    if (editorLayer === 'works') drawInterventionSurfaces();
+    if (editorLayer === 'survey') rawStrokes.forEach(function (stroke) { drawPolyline(stroke.raw, '#cbd5e1', 3); });
+
     walls.forEach(function (wall) {
       ctx.save();
-      ctx.strokeStyle = wall.id === selectedWallId ? '#2563eb' : '#0f172a';
-      ctx.lineWidth = wall.id === selectedWallId ? 10 : 8;
+      var style = editorLayer === 'works' ? wallInterventionStyle(wall) : {
+        color:wall.id === selectedWallId ? '#2563eb' : '#0f172a',
+        width:wall.id === selectedWallId ? 10 : 8,
+        dash:[]
+      };
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width;
+      ctx.setLineDash(style.dash || []);
       ctx.lineCap = 'round';
       var sa = worldToScreen(wall.a);
       var sb = worldToScreen(wall.b);
@@ -2124,11 +4474,69 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       ctx.stroke();
       ctx.restore();
     });
-    walls.forEach(drawMeasure);
+
+    if (editorLayer === 'survey') walls.forEach(drawMeasure);
     openings.forEach(drawOpening);
     drawRoomLabels();
-    drawNoteMarkers();
+    drawDirectionalPhotos();
+    if (editorLayer === 'works') drawNoteMarkers();
+    else annotationHitBoxes = [];
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
+  }
+
+  function annotationHitAt(sp) {
+    for (var i=annotationHitBoxes.length-1;i>=0;i--) {
+      var b = annotationHitBoxes[i];
+      if (sp.x >= b.x-5 && sp.x <= b.x+b.w+5 && sp.y >= b.y-5 && sp.y <= b.y+b.h+5) return b;
+    }
+    return null;
+  }
+
+  function startAnnotationDrag(e, hit) {
+    var note = notes.find(function (n) { return n.id === hit.noteId; });
+    if (!note) return false;
+    var anchorWorld = noteAnchor(note);
+    if (!anchorWorld) return false;
+    checkpoint();
+    annotationDrag = {
+      noteId:note.id,
+      pointerId:e.pointerId,
+      start:screenPoint(e),
+      initialCenter:{x:hit.center.x,y:hit.center.y},
+      anchorWorld:anchorWorld
+    };
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    hideObjectActionBar();
+    vibrate(12);
+    return true;
+  }
+
+  function updateAnnotationDrag(e) {
+    if (!annotationDrag || annotationDrag.pointerId !== e.pointerId) return false;
+    var note = notes.find(function (n) { return n.id === annotationDrag.noteId; });
+    if (!note) return false;
+    var sp = screenPoint(e);
+    var center = {
+      x:annotationDrag.initialCenter.x + sp.x - annotationDrag.start.x,
+      y:annotationDrag.initialCenter.y + sp.y - annotationDrag.start.y
+    };
+    var centerWorld = screenToWorld(center);
+    note.labelOffset = {
+      x:centerWorld.x - annotationDrag.anchorWorld.x,
+      y:centerWorld.y - annotationDrag.anchorWorld.y
+    };
+    render();
+    return true;
+  }
+
+  function finishAnnotationDrag(e) {
+    if (!annotationDrag || annotationDrag.pointerId !== e.pointerId) return false;
+    annotationDrag = null;
+    persistActive();
+    updateUI();
+    render();
+    vibrate(12);
+    return true;
   }
 
   function resize() {
@@ -2143,7 +4551,24 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   canvas.addEventListener('pointerdown', function (e) {
     if (e.isPrimary === false) return;
     e.preventDefault();
-    var p = point(e);
+    var sp = screenPoint(e);
+    var p = screenToWorld(sp);
+    if (pendingPhotoPlacement) {
+      commitPhotoPlacement(p);
+      return;
+    }
+    if (editorLayer === 'works') {
+      var annotationHit = annotationHitAt(sp);
+      if (annotationHit && startAnnotationDrag(e, annotationHit)) return;
+    }
+    if (openingMoveMode) {
+      startOpeningMoveDrag(e, p);
+      return;
+    }
+    if (wallMoveMode) {
+      commitWallEndpointMove(p);
+      return;
+    }
     if (roomPickMode) {
       handleRoomPick(p);
       return;
@@ -2153,6 +4578,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       return;
     }
     if (mode === 'draw') {
+      armLongPress(e.pointerId, p);
       activePointerId = e.pointerId;
       if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
       currentStroke = [p];
@@ -2169,9 +4595,23 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
 
   canvas.addEventListener('pointermove', function (e) {
     if (e.isPrimary === false) return;
+    if (openingMoveMode && openingMoveMode.dragging && openingMoveMode.pointerId === e.pointerId) {
+      e.preventDefault();
+      updateOpeningMoveDrag(e);
+      return;
+    }
+    if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
+      e.preventDefault();
+      updateAnnotationDrag(e);
+      return;
+    }
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
+    if (longPressState && longPressState.pointerId === e.pointerId &&
+        dist(longPressState.start, p) * viewZoom > 10) {
+      cancelLongPress();
+    }
     var last = currentStroke[currentStroke.length - 1];
     if (dist(last, p) >= 3 / viewZoom) currentStroke.push(p);
     render();
@@ -2179,6 +4619,19 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
 
   canvas.addEventListener('pointerup', function (e) {
     if (e.isPrimary === false) return;
+    if (openingMoveMode && openingMoveMode.dragging && openingMoveMode.pointerId === e.pointerId) {
+      e.preventDefault();
+      finishOpeningMoveDrag(e);
+      return;
+    }
+    if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
+      e.preventDefault();
+      finishAnnotationDrag(e);
+      return;
+    }
+    var longHandled = !!(longPressState && longPressState.pointerId === e.pointerId && longPressState.handled);
+    cancelLongPress();
+    if (longHandled) return;
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
@@ -2187,6 +4640,15 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   });
 
   canvas.addEventListener('pointercancel', function (e) {
+    cancelLongPress();
+    if (openingMoveMode && openingMoveMode.dragging && openingMoveMode.pointerId === e.pointerId) {
+      finishOpeningMoveDrag(e);
+      return;
+    }
+    if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
+      finishAnnotationDrag(e);
+      return;
+    }
     if (e.pointerId !== activePointerId) return;
     currentStroke = null;
     activePointerId = null;
@@ -2195,6 +4657,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   });
 
   $('newPlanBtn').addEventListener('click', newPlan);
+  $('newSiteBtn').addEventListener('click', function () { openSiteModal(null,null); });
+  $('showAllSitesBtn').addEventListener('click', function () { activeSiteFilter='all'; renderDashboard(); });
+  $('showNoSiteBtn').addEventListener('click', function () { activeSiteFilter='none'; renderDashboard(); });
   $('settingsBtn').addEventListener('click', openSettings);
   $('closeSettingsBtn').addEventListener('click', closeSettings);
   $('saveSettingsBtn').addEventListener('click', saveSettings);
@@ -2204,9 +4669,25 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
   $('windowBtn').addEventListener('click', function () { setMode('window'); });
   $('measureBtn').addEventListener('click', startMeasureMode);
-  $('doneBtn').addEventListener('click', exportJson);
+  $('doneBtn').addEventListener('click', openFinishCheck);
   $('undoBtn').addEventListener('click', undo);
+  $('redoBtn').addEventListener('click', redo);
+  $('objectMeasureBtn').addEventListener('click', measureSelectedObject);
+  $('objectMoveBtn').addEventListener('click', moveSelectedObject);
+  $('objectWorkBtn').addEventListener('click', directInterventionSelected);
+  $('objectPhotoBtn').addEventListener('click', captureSelectedObjectPhoto);
+  $('objectSwingBtn').addEventListener('click', swingSelectedDoor);
+  $('objectDeleteBtn').addEventListener('click', deleteSelectedObject);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
+  $('closeFinishCheckBtn').addEventListener('click', closeFinishCheck);
+  $('fixFinishCheckBtn').addEventListener('click', closeFinishCheck);
+  $('exportFinishCheckBtn').addEventListener('click', function () {
+    closeFinishCheck();
+    exportJson(true);
+  });
+  $('finishCheckBackdrop').addEventListener('click', function (e) {
+    if (e.target === $('finishCheckBackdrop')) closeFinishCheck();
+  });
   $('toolsBtn').addEventListener('click', openTools);
   $('closeToolsBtn').addEventListener('click', closeTools);
   $('toolsBackdrop').addEventListener('click', function (e) { if (e.target === $('toolsBackdrop')) closeTools(); });
@@ -2214,18 +4695,56 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
+  $('swingToggleBtn').addEventListener('click', toggleDoorSwing);
+  $('moveWallStartBtn').addEventListener('click', function () { startWallEndpointMove('a'); });
+  $('moveWallEndBtn').addEventListener('click', function () { startWallEndpointMove('b'); });
+  $('deleteWallBtn').addEventListener('click', deleteSelectedWall);
   $('deleteOpeningBtn').addEventListener('click', deleteCurrentOpening);
   $('zoomOutBtn').addEventListener('click', function () { setZoom(viewZoom / 1.25); });
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
-  $('notesBtn').addEventListener('click', function () { runTool(openNoteTargetChooser); });
-  $('roomBtn').addEventListener('click', function () { runTool(openRoomPicker); });
+  $('notesBtn').addEventListener('click', function () {
+    setEditorLayer('works', false);
+    runTool(openNoteTargetChooser);
+  });
+  $('surveyViewBtn').addEventListener('click', function () { setEditorLayer('survey'); });
+  $('worksViewBtn').addEventListener('click', function () { setEditorLayer('works'); });
+  $('roomBtn').addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    runTool(openRoomPicker);
+  });
   $('surfacesBtn').addEventListener('click', function () { runTool(openSurfaces); });
-  $('presentBtn').addEventListener('click', function () { runTool(openPresentation); });
+  $('photosBtn').addEventListener('click', openPhotosGallery);
+  $('takeoffBtn').addEventListener('click', openTakeoff);
+  $('siteBtn').addEventListener('click', openCurrentPlanSite);
+  $('backupsBtn').addEventListener('click', openBackups);
+  $('currentSiteBadge').addEventListener('click', openCurrentPlanSite);
+  $('closePhotosBtn').addEventListener('click', closePhotosGallery);
+  $('photosBackdrop').addEventListener('click', function (e) { if (e.target === $('photosBackdrop')) closePhotosGallery(); });
+  $('photoInput').addEventListener('change', handlePhotoInput);
+  $('roomPhotoBtn').addEventListener('click', captureCurrentRoomPhoto);
+  $('closeTakeoffBtn').addEventListener('click', closeTakeoff);
+  $('takeoffBackdrop').addEventListener('click', function (e) { if (e.target === $('takeoffBackdrop')) closeTakeoff(); });
+  $('closeSiteBtn').addEventListener('click', closeSiteModal);
+  $('siteBackdrop').addEventListener('click', function (e) { if (e.target === $('siteBackdrop')) closeSiteModal(); });
+  $('saveSiteBtn').addEventListener('click', saveSiteFromModal);
+  $('linkExistingSiteBtn').addEventListener('click', linkExistingSite);
+  $('detachPlanSiteBtn').addEventListener('click', detachCurrentPlanSite);
+  $('deleteSiteBtn').addEventListener('click', deleteEditingSite);
+  $('closeBackupsBtn').addEventListener('click', closeBackups);
+  $('backupsBackdrop').addEventListener('click', function (e) { if (e.target === $('backupsBackdrop')) closeBackups(); });
+  $('createBackupBtn').addEventListener('click', createManualBackup);
+  $('presentBtn').addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    runTool(openPresentation);
+  });
   $('closePresentationBtn').addEventListener('click', closePresentation);
   $('presentationBackdrop').addEventListener('click', function (e) { if (e.target === $('presentationBackdrop')) closePresentation(); });
   $('solvePlanBtn').addEventListener('click', function () { runTool(openSolver); });
+  $('elaborateBtn').addEventListener('click', function () { runTool(function () { startProcessing(false); }); });
   $('closeSolverBtn').addEventListener('click', closeSolver);
   $('cancelSolverBtn').addEventListener('click', closeSolver);
   $('applySolverBtn').addEventListener('click', applySolverResult);
@@ -2251,16 +4770,36 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   $('saveRawNoteBtn').addEventListener('click', function () { saveCurrentNote(false); });
   $('rewriteNoteBtn').addEventListener('click', rewriteCurrentNote);
   $('deleteNoteBtn').addEventListener('click', deleteCurrentNote);
+  document.querySelectorAll('[data-note-style]').forEach(function (b) {
+    b.addEventListener('click', function () { setNoteDisplayStyle(b.dataset.noteStyle); });
+  });
   $('wallHeightInput').addEventListener('change', changeWallHeight);
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
+  $('closeMissingMeasuresBtn').addEventListener('click', function () { $('missingMeasuresBackdrop').classList.add('hidden'); });
+  $('missingMeasuresBackdrop').addEventListener('click', function (e) { if (e.target === $('missingMeasuresBackdrop')) $('missingMeasuresBackdrop').classList.add('hidden'); });
+  $('insertMissingMeasuresBtn').addEventListener('click', function () {
+    $('missingMeasuresBackdrop').classList.add('hidden');
+    if (processedUI) processedUI.showTab('raw');
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) openNextMissing(missing[0].id);
+  });
   $('settingsBackdrop').addEventListener('click', function (e) { if (e.target === $('settingsBackdrop')) closeSettings(); });
   window.addEventListener('resize', function () {
     resize();
     if (presentationModel) requestAnimationFrame(renderPresentation);
   });
   document.addEventListener('visibilitychange', function () { if (document.hidden && activePlanId) persistActive(); });
+
+  processedUI = new ProcessedPlanUI({
+    getPlan: currentPlan,
+    getClient: backendClient,
+    toast: toast,
+    onElaborate: function () { startProcessing(false); },
+    onReprocess: function () { startProcessing(true); },
+    onConfigure: openSettings
+  });
 
   loadAll();
   showDashboard();

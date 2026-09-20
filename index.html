@@ -15,8 +15,13 @@
     </header>
     <div class="dash-actions">
       <button id="newPlanBtn" class="new-plan">＋ NUOVO RILIEVO</button>
+      <button id="newSiteBtn" class="new-site">＋ CANTIERE</button>
       <div id="serverBadge" class="server-badge offline">● Debian non collegato</div>
     </div>
+    <section id="siteArchive" class="site-archive">
+      <div class="site-archive-head"><b>CANTIERI</b><button id="showAllSitesBtn" class="site-filter active">TUTTI</button><button id="showNoSiteBtn" class="site-filter">SENZA CANTIERE</button></div>
+      <div id="siteGrid" class="site-grid"></div>
+    </section>
     <main class="library-wrap">
       <div id="emptyLibrary" class="empty-library">
         <div class="empty-icon">📐</div><h2>Nessun rilievo</h2><p>Premi “Nuovo rilievo” e disegna la forma con un dito.</p>
@@ -31,14 +36,37 @@
       <div class="top-title"><input id="planName" value="Nuovo rilievo" maxlength="40" aria-label="Nome rilievo"></div>
       <div class="top-actions">
         <button id="undoBtn" class="icon-btn" aria-label="Annulla">↶</button>
+        <button id="redoBtn" class="icon-btn" aria-label="Ripristina">↷</button>
         <button id="toolsBtn" class="icon-btn tools-menu-btn hidden" aria-label="Apri strumenti">•••</button>
         <button id="saveBtn" class="save-btn">SALVA</button>
       </div>
     </header>
+    <nav class="workspace-tabs" aria-label="Sezioni rilievo">
+      <button id="rawTabBtn" class="workspace-tab active">RILIEVO</button>
+      <button id="processedTabBtn" class="workspace-tab">ELABORATI</button>
+    </nav>
+    <div id="rawWorkspace" class="raw-workspace">
     <main id="stageWrap">
       <canvas id="stage"></canvas>
       <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
       <div id="statusPill" class="status-pill hidden"></div>
+      <div id="currentSiteBadge" class="current-site-badge hidden"></div>
+      <div id="photoPlacementBanner" class="photo-placement-banner hidden">📷 Tocca il punto da cui hai scattato. La freccia punterà verso il soggetto.</div>
+      <div id="stageModeToggle" class="stage-mode-toggle hidden" aria-label="Vista planimetria">
+        <button id="surveyViewBtn" class="active">RILIEVO</button>
+        <button id="worksViewBtn">INTERVENTI</button>
+      </div>
+      <div id="objectActionBar" class="object-action-bar hidden" aria-label="Azioni elemento">
+        <div id="objectActionLabel" class="object-action-label">Elemento</div>
+        <div class="object-action-buttons">
+          <button id="objectMeasureBtn">📏 MISURA</button>
+          <button id="objectMoveBtn">↔ SPOSTA</button>
+          <button id="objectWorkBtn">🛠 INTERVENTO</button>
+          <button id="objectPhotoBtn">📷 FOTO</button>
+          <button id="objectSwingBtn" class="hidden">↻ APERTURA</button>
+          <button id="objectDeleteBtn" class="danger">🗑 ELIMINA</button>
+        </div>
+      </div>
       <div class="view-controls" aria-label="Controlli vista">
         <button id="zoomOutBtn" aria-label="Zoom indietro">−</button>
         <button id="zoomResetBtn" class="zoom-level" aria-label="Ripristina vista">100%</button>
@@ -53,6 +81,77 @@
       <button id="measureBtn" class="tool measure"><span class="tool-icon">📏</span><span id="measureLabel">MISURE</span></button>
       <button id="doneBtn" class="tool done"><span class="tool-icon">✓</span><span>FATTO</span></button>
     </footer>
+    </div>
+
+    <section id="processedWorkspace" class="processed-workspace hidden" aria-label="Elaborati professionali">
+      <div id="processedEmpty" class="processed-empty">
+        <div class="processed-empty-icon">🧠</div>
+        <h2>Nessun elaborato ancora</h2>
+        <p>Il rilievo originale resta qui sul telefono. Quando le misure sono complete puoi far creare al backend la planimetria professionale.</p>
+        <button id="processNowBtn" class="primary block">ELABORA RILIEVO</button>
+        <button id="configureBackendBtn" class="secondary block processed-configure">CONFIGURA BACKEND RILIEVI</button>
+      </div>
+
+      <section id="processedStatusPanel" class="processing-panel hidden">
+        <div class="processing-spinner" aria-hidden="true"></div>
+        <div>
+          <div class="eyebrow dark">GE360</div>
+          <h2 id="processedStatusTitle">ELABORAZIONE IN CORSO</h2>
+          <p id="processedStatusText">Sto preparando la planimetria…</p>
+        </div>
+      </section>
+
+      <div id="staleBanner" class="stale-banner hidden">
+        <div><b>⚠️ RILIEVO MODIFICATO</b><span>L’elaborato attuale appartiene a una versione precedente.</span></div>
+        <button id="reprocessBtn">RIELABORA</button>
+      </div>
+
+      <article id="processedCard" class="processed-card hidden">
+        <div class="processed-card-head">
+          <div><div class="eyebrow dark">PLANIMETRIA ELABORATA</div><h2 id="processedTitle">Rilievo</h2></div>
+          <div id="processedQuality" class="quality-badge">✅ OK</div>
+        </div>
+
+        <div class="processed-preview-wrap">
+          <img id="processedPreview" class="processed-preview hidden" alt="Anteprima planimetria elaborata">
+          <div id="processedPreviewPlaceholder" class="processed-preview-placeholder">ANTEPRIMA NON DISPONIBILE</div>
+        </div>
+
+        <div class="processed-meta">
+          <b id="processedSummary">Elaborato professionale</b>
+          <span id="processedVersion"></span>
+          <span id="processedDate"></span>
+        </div>
+
+        <div id="processedWarnings" class="processed-warnings hidden">
+          <b>⚠️ PLANIMETRIA DA VERIFICARE</b>
+          <ul id="processedWarningsList"></ul>
+        </div>
+
+        <div class="processed-open-actions">
+          <button id="open2dBtn" class="primary">APRI 2D</button>
+          <button id="open3dBtn" class="secondary">🏠 APRI 3D</button>
+        </div>
+
+        <div id="processedFileButtons" class="processed-files"></div>
+
+        <div class="processed-main-actions">
+          <button id="shareProcessedBtn" class="secondary">📤 CONDIVIDI</button>
+          <button id="saveProcessedBtn" class="secondary">💾 SALVA</button>
+          <button id="downloadAllBtn" class="primary">📦 SCARICA TUTTO</button>
+        </div>
+
+        <details class="processed-details">
+          <summary>DETTAGLI ELABORAZIONE</summary>
+          <div>Le misure inserite nel rilievo restano la sorgente autoritativa. Warning e versioni arrivano dal backend.</div>
+        </details>
+      </article>
+
+      <section id="versionsSection" class="versions-section hidden">
+        <h3>VERSIONI</h3>
+        <div id="versionsList" class="versions-list"></div>
+      </section>
+    </section>
   </section>
 
   <div id="toolsBackdrop" class="tools-backdrop hidden">
@@ -66,11 +165,16 @@
         <button id="closeToolsBtn" class="round-btn light" aria-label="Chiudi strumenti">✕</button>
       </div>
       <div class="tools-grid">
-        <button id="notesBtn" class="tool-card notes-btn hidden"><span>📝</span><b>APPUNTI</b><small>Lavorazioni e note</small></button>
+        <button id="notesBtn" class="tool-card notes-btn hidden"><span>🛠️</span><b>INTERVENTI</b><small>Demolizioni e lavorazioni</small></button>
         <button id="presentBtn" class="tool-card present-btn hidden"><span>👁</span><b>PRESENTA</b><small>Vista pulita</small></button>
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
         <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
+        <button id="photosBtn" class="tool-card photos-btn hidden"><span>📷</span><b>FOTO</b><small>Foto collegate alla pianta</small></button>
+        <button id="takeoffBtn" class="tool-card takeoff-btn hidden"><span>🧮</span><b>COMPUTO LIVE</b><small>Quantità dagli interventi</small></button>
+        <button id="siteBtn" class="tool-card site-btn hidden"><span>🏗️</span><b>CANTIERE</b><small>Cliente, indirizzo e stato</small></button>
+        <button id="backupsBtn" class="tool-card backup-btn hidden"><span>🛟</span><b>BACKUP</b><small>Ripristina versioni locali</small></button>
         <button id="solvePlanBtn" class="tool-card solve-plan-btn hidden"><span>✨</span><b>SISTEMA PIANTA</b><small>Correggi lo schizzo</small></button>
+        <button id="elaborateBtn" class="tool-card elaborate-btn hidden"><span>🧠</span><b>ELABORA RILIEVO</b><small>Crea planimetria professionale</small></button>
         <button id="clearBtn" class="tool-card danger-tool hidden"><span>🧹</span><b>PULISCI</b><small>Cancella il disegno</small></button>
       </div>
     </section>
@@ -86,15 +190,61 @@
         <button data-key=",">,</button><button data-key="0">0</button><button data-key="⌫">⌫</button>
       </div>
       <button id="cornerToggleBtn" class="corner-toggle hidden">↔ CAMBIA ANGOLO</button>
+      <button id="swingToggleBtn" class="corner-toggle hidden">↻ INVERTI APERTURA PORTA</button>
+      <div id="wallEditActions" class="wall-edit-actions hidden">
+        <button id="moveWallStartBtn" type="button">↙ SPOSTA INIZIO</button>
+        <button id="moveWallEndBtn" type="button">↗ SPOSTA FINE</button>
+      </div>
+      <button id="deleteWallBtn" class="delete-opening hidden">🗑 ELIMINA MURO</button>
       <button id="deleteOpeningBtn" class="delete-opening hidden">🗑 ELIMINA APERTURA</button>
       <div class="sheet-actions"><button id="laterBtn" class="secondary">DOPO</button><button id="confirmBtn" class="primary">CONFERMA ✓</button></div>
+    </section>
+  </div>
+
+  <div id="siteBackdrop" class="modal-backdrop hidden">
+    <section class="site-card-modal">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">ARCHIVIO CANTIERI</div><h2 id="siteModalTitle">Nuovo cantiere</h2></div>
+        <button id="closeSiteBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="siteExistingWrap" class="site-existing-wrap hidden">
+        <label>COLLEGA A CANTIERE ESISTENTE<select id="siteExistingSelect"></select></label>
+        <button id="linkExistingSiteBtn" class="secondary block">COLLEGA CANTIERE</button>
+        <div class="site-divider">oppure crea un nuovo cantiere</div>
+      </div>
+      <label>NOME CANTIERE<input id="siteTitleInput" placeholder="Es. Bagno Rossi, Via Giulia 96"></label>
+      <label>CLIENTE<input id="siteClientInput" placeholder="Nome cliente"></label>
+      <label>INDIRIZZO<input id="siteAddressInput" placeholder="Via, città"></label>
+      <div class="site-contact-grid">
+        <label>TELEFONO<input id="sitePhoneInput" placeholder="+39..."></label>
+        <label>EMAIL<input id="siteEmailInput" type="email" placeholder="cliente@email.it"></label>
+      </div>
+      <label>STATO<select id="siteStatusInput"></select></label>
+      <label>NOTE<textarea id="siteNotesInput" rows="3" placeholder="Accesso, chiavi, richieste cliente..."></textarea></label>
+      <div class="site-modal-actions">
+        <button id="detachPlanSiteBtn" class="secondary hidden">SCOLLEGA RILIEVO</button>
+        <button id="saveSiteBtn" class="primary">SALVA CANTIERE ✓</button>
+      </div>
+      <button id="deleteSiteBtn" class="delete-opening hidden">🗑 ELIMINA CANTIERE</button>
+    </section>
+  </div>
+
+  <div id="backupsBackdrop" class="modal-backdrop hidden">
+    <section class="backup-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">BACKUP LOCALI</div><h2>Versioni del rilievo</h2></div>
+        <button id="closeBackupsBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div class="backup-headline"><b>Ultimi 20 snapshot</b><span>GE360 crea backup automatici solo quando il contenuto cambia.</span></div>
+      <button id="createBackupBtn" class="secondary block">＋ CREA BACKUP ORA</button>
+      <div id="backupList" class="backup-list"></div>
     </section>
   </div>
 
   <div id="settingsBackdrop" class="modal-backdrop hidden">
     <section class="settings-card">
       <div class="settings-head"><div><div class="eyebrow dark">DEBIAN</div><h2>Planner professionale</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>
-      <label>Indirizzo server<input id="serverUrl" placeholder="https://tuo-server-ge360/api/v1"></label>
+      <label>URL BACKEND RILIEVI<input id="serverUrl" placeholder="https://tuo-server-ge360/api/v1"></label>
       <label>API Key<input id="apiKey" type="password" placeholder="Incolla la chiave API"></label>
       <p class="security-note">La chiave resta sul telefono. Non viene salvata nella repo GitHub.</p>
       <div class="settings-actions"><button id="testServerBtn" class="secondary block">TEST COLLEGAMENTO</button><button id="saveSettingsBtn" class="primary block">SALVA</button></div>
@@ -129,7 +279,7 @@
   <div id="roomBackdrop" class="modal-backdrop hidden">
     <section class="room-card">
       <div class="settings-head">
-        <div><div class="eyebrow dark">AMBIENTE</div><h2>Che stanza è?</h2></div>
+        <div><div class="eyebrow dark">AMBIENTE</div><h2 id="roomModalTitle">Che stanza è?</h2><div id="roomAutoHint" class="room-auto-hint hidden">Ambiente riconosciuto automaticamente dalla geometria.</div></div>
         <button id="closeRoomBtn" class="round-btn light" aria-label="Chiudi">✕</button>
       </div>
       <div class="room-presets">
@@ -147,6 +297,10 @@
       <label class="room-custom-label">Nome personalizzato
         <input id="roomCustomName" placeholder="Es. Studio, lavanderia...">
       </label>
+      <div class="room-photo-row">
+        <button id="roomPhotoBtn" class="secondary block">📷 FOTO AMBIENTE</button>
+        <span id="roomPhotoCount" class="room-photo-count">0 foto</span>
+      </div>
       <button id="saveRoomBtn" class="primary block">SALVA AMBIENTE ✓</button>
     </section>
   </div>
@@ -171,7 +325,7 @@
   <div id="noteTargetBackdrop" class="modal-backdrop hidden">
     <section class="note-target-card">
       <div class="settings-head">
-        <div><div class="eyebrow dark">APPUNTI DI CANTIERE</div><h2>Cosa vuoi annotare?</h2></div>
+        <div><div class="eyebrow dark">INTERVENTI DI CANTIERE</div><h2>Dove devi lavorare?</h2></div>
         <button id="closeNoteTargetBtn" class="round-btn light" aria-label="Chiudi">✕</button>
       </div>
       <div class="note-target-grid">
@@ -181,7 +335,7 @@
         <button data-note-target="wall">▮<span>MURO</span></button>
         <button data-note-target="opening">🚪<span>PORTA / FINESTRA</span></button>
       </div>
-      <p class="note-target-help">Scegli il tipo, poi tocca direttamente l'elemento sulla pianta.</p>
+      <p class="note-target-help">Scegli muro, pavimento, soffitto, ambiente o apertura. Poi tocca l'elemento sulla pianta e seleziona una o più lavorazioni.</p>
     </section>
   </div>
 
@@ -189,15 +343,29 @@
     <section class="note-editor-card">
       <div class="settings-head">
         <div>
-          <div class="eyebrow dark">APPUNTO</div>
+          <div class="eyebrow dark">INTERVENTO</div>
           <h2 id="noteTargetTitle">Elemento</h2>
           <div id="noteTargetMeta" class="note-target-meta"></div>
         </div>
         <button id="closeNoteEditorBtn" class="round-btn light" aria-label="Chiudi">✕</button>
       </div>
 
-      <label class="note-label">Appunto grezzo
-        <textarea id="noteRawText" rows="7" placeholder="Es. togli piastrelle, sistemare tracce idraulico, impermeabilizzare doccia e nuove fino 120..."></textarea>
+      <div class="note-work-section">
+        <div class="note-section-title">LAVORAZIONI</div>
+        <div id="noteWorkPresets" class="note-work-presets"></div>
+        <p class="note-work-help">Puoi selezionare più lavorazioni sullo stesso elemento.</p>
+      </div>
+
+      <div class="note-style-section">
+        <div class="note-section-title">COME MOSTRARLO IN PIANTA</div>
+        <div class="note-style-toggle">
+          <button type="button" data-note-style="callout" class="active">💬 VIGNETTA</button>
+          <button type="button" data-note-style="text">T TESTO</button>
+        </div>
+      </div>
+
+      <label class="note-label">Nota / dettaglio <small>facoltativo</small>
+        <textarea id="noteRawText" rows="4" placeholder="Es. demolire fino al massetto, nuova piastrella 60×120, mantenere il battiscopa..."></textarea>
       </label>
 
       <div id="noteAiResult" class="note-ai-result hidden">
@@ -208,10 +376,37 @@
       </div>
 
       <div class="note-actions">
-        <button id="saveRawNoteBtn" class="secondary">SALVA GREZZO</button>
-        <button id="rewriteNoteBtn" class="primary">✨ SISTEMA CON IA</button>
+        <button id="saveRawNoteBtn" class="secondary">SALVA INTERVENTO</button>
+        <button id="rewriteNoteBtn" class="primary">✨ RISCRIVI NOTA</button>
       </div>
-      <button id="deleteNoteBtn" class="delete-opening hidden">🗑 ELIMINA APPUNTO</button>
+      <button id="deleteNoteBtn" class="delete-opening hidden">🗑 ELIMINA INTERVENTO</button>
+    </section>
+  </div>
+
+  <input id="photoInput" class="hidden" type="file" accept="image/*" capture="environment">
+
+  <div id="photosBackdrop" class="modal-backdrop hidden">
+    <section class="photo-gallery-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">DOCUMENTAZIONE</div><h2>Foto rilievo</h2></div>
+        <button id="closePhotosBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="photoGallerySummary" class="photo-gallery-summary"></div>
+      <div id="photoGallery" class="photo-gallery"></div>
+      <p class="photo-storage-note">Le foto restano sul dispositivo in IndexedDB. Nel rilievo vengono salvati solo riferimenti e metadati.</p>
+    </section>
+  </div>
+
+  <div id="takeoffBackdrop" class="modal-backdrop hidden">
+    <section class="takeoff-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">COMPUTO PROGRESSIVO</div><h2>Quantità di cantiere</h2></div>
+        <button id="closeTakeoffBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="takeoffSummary" class="takeoff-summary"></div>
+      <div id="takeoffRows" class="takeoff-rows"></div>
+      <div id="takeoffUnresolved" class="takeoff-unresolved hidden"></div>
+      <p class="takeoff-note">Quantità indicative ricavate dal rilievo e dagli interventi strutturati. Le righe ≈ dipendono da quote o superfici stimate.</p>
     </section>
   </div>
 
@@ -231,6 +426,65 @@
       <div id="presentationSummary" class="presentation-summary"></div>
       <div id="presentationRooms" class="presentation-rooms"></div>
       <div class="presentation-foot">Superfici indicative da rilievo di cantiere · pareti lorde senza detrazione di porte e finestre.</div>
+    </section>
+  </div>
+
+
+  <div id="missingMeasuresBackdrop" class="modal-backdrop hidden">
+    <section class="missing-measures-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">MISURE MANCANTI</div><h2>Completa il rilievo</h2></div>
+        <button id="closeMissingMeasuresBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p id="missingMeasuresText">Mancano misure reali su alcuni muri.</p>
+      <button id="insertMissingMeasuresBtn" class="primary block">INSERISCI MISURE</button>
+    </section>
+  </div>
+
+  <div id="finishCheckBackdrop" class="modal-backdrop hidden">
+    <section class="finish-check-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">CONTROLLO RILIEVO</div><h2 id="finishCheckTitle">Verifica finale</h2></div>
+        <button id="closeFinishCheckBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="finishCheckSummary" class="finish-check-summary"></div>
+      <div id="finishCheckList" class="finish-check-list"></div>
+      <div class="finish-check-actions">
+        <button id="fixFinishCheckBtn" class="secondary">TORNA AL RILIEVO</button>
+        <button id="exportFinishCheckBtn" class="primary">ESPORTA JSON</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="viewer2dBackdrop" class="viewer-backdrop hidden">
+    <section id="viewer2dPanel" class="viewer-panel">
+      <header class="viewer-head">
+        <div><div class="eyebrow">GE360</div><b>PLANIMETRIA 2D</b></div>
+        <button id="close2dBtn" class="viewer-close">✕</button>
+      </header>
+      <div id="viewer2dStage" class="viewer2d-stage"><img id="viewer2dImage" alt="Planimetria 2D"></div>
+      <footer class="viewer-controls">
+        <button id="fit2dBtn">ADATTA</button>
+        <button id="reset2dBtn">RESET</button>
+        <button id="fullscreen2dBtn">FULLSCREEN</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="viewer3dBackdrop" class="viewer-backdrop hidden">
+    <section id="viewer3dPanel" class="viewer-panel">
+      <header class="viewer-head">
+        <div><div class="eyebrow">GE360</div><b>MODELLO 3D</b></div>
+        <button id="close3dBtn" class="viewer-close">✕</button>
+      </header>
+      <div id="viewer3dStage" class="viewer3d-stage"></div>
+      <div id="viewer3dLoading" class="viewer-loading hidden">Caricamento 3D…</div>
+      <footer class="viewer-controls viewer-controls-3d">
+        <button id="top3dBtn">VISTA ALTO</button>
+        <button id="perspective3dBtn">VISTA 3D</button>
+        <button id="reset3dBtn">RESET</button>
+        <button id="fullscreen3dBtn">FULLSCREEN</button>
+      </footer>
     </section>
   </div>
 

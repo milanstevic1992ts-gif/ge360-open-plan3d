@@ -6,7 +6,7 @@
  * la tolleranza di fusione nodi è nelle unità dello SCHIZZO (px).
  */
 
-export const ENGINE_VERSION = "1.0.0";
+export const ENGINE_VERSION = "1.1.0";
 
 /**
  * Preset delle tre modalità. Ogni valore può essere sovrascritto
@@ -20,6 +20,7 @@ export const MODE_PRESETS = Object.freeze({
     parallelTolerance: 3,
     nonAdjacentParallel: "none",
     maxClosureGapCm: 3,
+    topologyRepairMaxGapCm: 25,
     sketchWeight: 0.3,
     alignToAxes: false,
   }),
@@ -30,6 +31,7 @@ export const MODE_PRESETS = Object.freeze({
     parallelTolerance: 5,
     nonAdjacentParallel: "topological",
     maxClosureGapCm: 5,
+    topologyRepairMaxGapCm: 50,
     sketchWeight: 0.1,
     alignToAxes: false,
   }),
@@ -40,6 +42,7 @@ export const MODE_PRESETS = Object.freeze({
     parallelTolerance: 8,
     nonAdjacentParallel: "component",
     maxClosureGapCm: 10,
+    topologyRepairMaxGapCm: 80,
     sketchWeight: 0.05,
     alignToAxes: true,
   }),
@@ -49,6 +52,11 @@ export const DEFAULT_OPTIONS = Object.freeze({
   mode: "normal",
   nodeMergeTolerance: null,
   nodeMergeToleranceRatio: 0.015,
+  topologyRepair: true,
+  topologyRepairMaxGapCm: 50,
+  topologyRepairMaxGapRatio: 0.075,
+  topologyRepairAttachRatio: 0.75,
+  topologyRepairAmbiguityRatio: 1.25,
   closureToleranceCm: 0.05,
   closureInfoThresholdCm: 1,
   proportionWarningRatio: 3,

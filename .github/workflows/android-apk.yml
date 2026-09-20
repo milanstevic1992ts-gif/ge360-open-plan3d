@@ -1,9 +1,12 @@
 name: GE360 Rilievo APK
 
 on:
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
+  push:
+    branches:
+      - frontend-backend-elaborati-v1
+    paths:
+      - ".github/apk-build-trigger"
 
 permissions:
   contents: read
@@ -57,9 +60,9 @@ jobs:
       - name: Rename APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk GE360-Rilievo-debug.apk
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: GE360-Rilievo-APK
-          path: GE360-Rilievo-v1-debug.apk
+          name: GE360-Rilievo-debug-APK
+          path: GE360-Rilievo-debug.apk
           retention-days: 14

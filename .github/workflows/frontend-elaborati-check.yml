@@ -1,0 +1,69 @@
+name: GE360 Frontend Elaborati Check
+
+on:
+  push:
+    branches: [ frontend-backend-elaborati-v1 ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: JavaScript syntax
+        run: |
+          node --check js/app.js
+          node --check js/backend-client.js
+          node --check js/processed-plan.js
+          node --check js/processed-files.js
+          node --check js/processed-viewer.js
+          node --check js/view3d.js
+          node --check js/room-surfaces.js
+          node --check js/sketch-snap.js
+          for f in geometry-engine/*.js; do node --check "$f"; done
+
+      - name: Integration and compatibility tests
+        run: node --test tests/*.test.mjs
+
+      - name: Ensure no repository API key
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const hits = [];
+          const secretPatterns = [
+            /GE360_RILIEVO_API_KEY\s*=\s*['"][^'"]{8,}['"]/,
+            /apiKey\s*:\s*['"][A-Za-z0-9_-]{20,}['"]/
+          ];
+          function walk(dir) {
+            for (const name of fs.readdirSync(dir)) {
+              if (name === '.git' || name === 'node_modules') continue;
+              const full = path.join(dir, name);
+              const stat = fs.statSync(full);
+              if (stat.isDirectory()) walk(full);
+              else if (!/\.md$/i.test(name)) {
+                const text = fs.readFileSync(full, 'utf8');
+                if (secretPatterns.some(re => re.test(text))) hits.push(full);
+              }
+            }
+          }
+          walk('.');
+          if (hits.length) {
+            console.error('Potential hardcoded API key found:', hits.join(', '));
+            process.exit(1);
+          }
+          console.log('No hardcoded API key patterns found');
+          NODE
