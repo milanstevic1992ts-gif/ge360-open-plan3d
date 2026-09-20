@@ -25,8 +25,14 @@ export class BackendClient {
 
   resolve(resource) {
     if (!resource) return '';
-    if (/^https?:\/\//i.test(resource) || /^blob:/i.test(resource)) return resource;
-    return this.baseUrl + '/' + String(resource).replace(/^\/+/, '');
+    const value = String(resource);
+    if (/^https?:\/\//i.test(value) || /^blob:/i.test(value)) return value;
+    if (/^\/api\//i.test(value)) {
+      try {
+        return new URL(value, new URL(this.baseUrl).origin).toString();
+      } catch (_) {}
+    }
+    return this.baseUrl + '/' + value.replace(/^\/+/, '');
   }
 
   async request(pathOrUrl, { method = 'GET', body, headers = {}, responseType = 'json', timeoutMs } = {}) {
