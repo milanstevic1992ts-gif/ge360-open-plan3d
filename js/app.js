@@ -1392,6 +1392,10 @@ import { ProcessedPlanUI } from './processed-viewer.js';
 
   function openRoomPicker() {
     if (!walls.length) return toast('Prima disegna la pianta');
+    // AMBIENTE deve restare una modalità di selezione sul rilievo,
+    // senza aprire o lasciare visibili pannelli di presentazione.
+    closePresentation();
+    closeSurfaces();
     cancelPickModes();
     roomPickMode = true;
     $('roomBtn').classList.add('active');
@@ -1695,6 +1699,7 @@ import { ProcessedPlanUI } from './processed-viewer.js';
   }
 
   function openPresentation() {
+    if (roomPickMode) return toast('Prima termina la selezione AMBIENTE');
     cancelPickModes();
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
@@ -1704,10 +1709,13 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     }
 
     var solved = solvedPresentationWalls();
-    var cleanWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
-    var cache = calculateSurfaces(cleanWalls, rooms, wallHeightM);
+    var calculationWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
+    var cache = calculateSurfaces(calculationWalls, rooms, wallHeightM);
     presentationModel = {
-      walls: cleanWalls,
+      // La vista PRESENTA deve conservare esattamente la forma che l'utente
+      // vede nel rilievo. Il solver serve solo per i calcoli indicativi.
+      walls: clone(walls),
+      calculationWalls: calculationWalls,
       openings: clone(openings),
       rooms: clone(rooms),
       surfaces: cache
@@ -1774,9 +1782,9 @@ import { ProcessedPlanUI } from './processed-viewer.js';
 
     function tp(p) { return { x: p.x * scale + ox, y: p.y * scale + oy }; }
 
-    var faces = presentationModel.surfaces.faces || [];
+    var displayFaces = buildFaces(pwalls);
     presentationModel.rooms.forEach(function (room, idx) {
-      var face = matchRoomFace(room, faces);
+      var face = matchRoomFace(room, displayFaces);
       if (!face) return;
       pctx.fillStyle = idx % 2 ? 'rgba(14,165,233,.055)' : 'rgba(37,99,235,.045)';
       pctx.beginPath();
@@ -1835,10 +1843,27 @@ import { ProcessedPlanUI } from './processed-viewer.js';
 
     var metricByRoom = new Map();
     (presentationModel.surfaces.roomMetrics || []).forEach(function (m) { metricByRoom.set(m.room.id, m); });
+
+    function roomDisplayAnchor(room) {
+      var face = matchRoomFace(room, displayFaces);
+      if (face) return face.centroid;
+      var ids = Array.isArray(room.wallIds) ? room.wallIds : [];
+      var pts = [];
+      pwalls.forEach(function (wall) {
+        if (ids.indexOf(wall.id) === -1) return;
+        pts.push(wall.a, wall.b);
+      });
+      if (!pts.length) return null;
+      return {
+        x: pts.reduce(function (sum, q) { return sum + q.x; }, 0) / pts.length,
+        y: pts.reduce(function (sum, q) { return sum + q.y; }, 0) / pts.length
+      };
+    }
+
     presentationModel.rooms.forEach(function (room) {
-      var face = matchRoomFace(room, faces);
-      if (!face) return;
-      var p = tp(face.centroid);
+      var anchor = roomDisplayAnchor(room);
+      if (!anchor) return;
+      var p = tp(anchor);
       var metric = metricByRoom.get(room.id);
       var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
       var title = String(room.name || 'Ambiente').toUpperCase();
@@ -2389,9 +2414,17 @@ import { ProcessedPlanUI } from './processed-viewer.js';
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
   $('notesBtn').addEventListener('click', function () { runTool(openNoteTargetChooser); });
-  $('roomBtn').addEventListener('click', function () { runTool(openRoomPicker); });
+  $('roomBtn').addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    runTool(openRoomPicker);
+  });
   $('surfacesBtn').addEventListener('click', function () { runTool(openSurfaces); });
-  $('presentBtn').addEventListener('click', function () { runTool(openPresentation); });
+  $('presentBtn').addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    runTool(openPresentation);
+  });
   $('closePresentationBtn').addEventListener('click', closePresentation);
   $('presentationBackdrop').addEventListener('click', function (e) { if (e.target === $('presentationBackdrop')) closePresentation(); });
   $('solvePlanBtn').addEventListener('click', function () { runTool(openSolver); });
