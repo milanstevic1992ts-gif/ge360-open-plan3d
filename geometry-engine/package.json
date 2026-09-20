@@ -1,0 +1,10 @@
+{
+  "name": "ge360-geometry-engine",
+  "version": "1.0.0",
+  "description": "Motore geometrico deterministico per GE360 Rilievo",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED"
+}
