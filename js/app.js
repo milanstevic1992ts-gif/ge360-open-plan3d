@@ -1,6 +1,6 @@
 import { solveFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
-import { straightenPolyline } from './sketch-snap.js';
+import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
 
 (function () {
   'use strict';
@@ -437,7 +437,25 @@ import { straightenPolyline } from './sketch-snap.js';
     });
     if (simp.length < 2) return;
 
+    var cornerSnap = snapPolylineCornersToWalls(simp, walls, {
+      threshold: 46 / viewZoom,
+      axisToleranceDeg: 25
+    });
+    simp = cornerSnap.points;
+
     checkpoint();
+
+    cornerSnap.wallUpdates.forEach(function (update) {
+      var original = update.originalPoint;
+      walls.forEach(function (wall) {
+        ['a', 'b'].forEach(function (end) {
+          var p = wall[end];
+          if (!p || dist(p, original) > 3 / viewZoom) return;
+          wall[end] = { x: update.point.x, y: update.point.y };
+        });
+      });
+    });
+
     var stroke = {
       id: uid('s'),
       raw: points.map(function (p) { return { x: p.x, y: p.y }; }),
