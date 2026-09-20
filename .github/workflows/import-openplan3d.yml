@@ -2,7 +2,7 @@ name: Import OpenPlan3D
 
 on:
   workflow_dispatch:
-  issues:
+  pull_request:
     types: [opened]
 
 permissions:
@@ -10,12 +10,13 @@ permissions:
 
 jobs:
   import:
-    if: github.event_name == 'workflow_dispatch' || github.event.issue.title == 'IMPORT OPENPLAN3D NOW'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.title == 'IMPORT OPENPLAN3D NOW'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout destination
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Clone upstream OpenPlan3D
