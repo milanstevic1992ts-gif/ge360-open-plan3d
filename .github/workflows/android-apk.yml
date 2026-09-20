@@ -1,4 +1,4 @@
-name: GE360 Rilievo APK
+name: GE360 Rilievo Signed Release APK
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +28,11 @@ jobs:
           java-version: "21"
 
       - name: Check JavaScript
-        run: node --check js/app.js
+        run: |
+          cp js/app.js /tmp/ge360-app.mjs
+          cp js/room-surfaces.js /tmp/ge360-room-surfaces.mjs
+          node --check /tmp/ge360-app.mjs
+          node --check /tmp/ge360-room-surfaces.mjs
 
       - name: Prepare Capacitor
         run: |
@@ -50,16 +54,115 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Build debug APK
+      - name: Generate release signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGN_PASS="$(openssl rand -hex 24)"
+          printf '%s' "$SIGN_PASS" > /tmp/ge360-sign-pass.txt
+          keytool -genkeypair -v \
+            -keystore /tmp/ge360-release.jks \
+            -storepass "$SIGN_PASS" \
+            -keypass "$SIGN_PASS" \
+            -alias ge360 \
+            -keyalg RSA \
+            -keysize 3072 \
+            -validity 10000 \
+            -dname "CN=GE360 Rilievo, OU=GE360, O=EDIL MILAN STEVIC, L=Trieste, ST=TS, C=IT"
+
+      - name: Build unsigned release
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleRelease --stacktrace
 
-      - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk GE360-Rilievo-debug.apk
+      - name: Sign and verify release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGN_PASS="$(cat /tmp/ge360-sign-pass.txt)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          UNSIGNED_APK="$(find android/app/build/outputs/apk/release -type f -name '*release*.apk' | head -n 1)"
+          test -f "$UNSIGNED_APK"
 
-      - name: Upload APK
+          "$APKSIGNER" sign \
+            --ks /tmp/ge360-release.jks \
+            --ks-key-alias ge360 \
+            --ks-pass "pass:$SIGN_PASS" \
+            --key-pass "pass:$SIGN_PASS" \
+            --out GE360-Rilievo-release-signed.apk \
+            "$UNSIGNED_APK"
+
+          "$APKSIGNER" verify --verbose --print-certs GE360-Rilievo-release-signed.apk | tee GE360-signature-verification.txt
+
+          {
+            echo "GE360 Rilievo signing backup"
+            echo "Alias: ge360"
+            echo "Store password: $SIGN_PASS"
+            echo "Key password: $SIGN_PASS"
+            echo
+            echo "IMPORTANT: keep this file and ge360-release.jks together."
+            echo "Future APK updates for com.ge360.rilievo must be signed with this same keystore."
+          } > /tmp/signing-info.txt
+
+      - name: Encrypt signing backup for handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/ge360-backup-public-cert.pem <<'CERT'
+          -----BEGIN CERTIFICATE-----
+          MIIEbTCCAtWgAwIBAgIUAjMFTvl/vrtmTjVsWWdLxZZt7qwwDQYJKoZIhvcNAQEL
+          BQAwRjEnMCUGA1UEAwweR0UzNjAgU2lnbmluZyBCYWNrdXAgVHJhbnNwb3J0MQ4w
+          DAYDVQQKDAVHRTM2MDELMAkGA1UEBhMCSVQwHhcNMjYwOTIwMTMyOTQzWhcNMjYw
+          OTIyMTMyOTQzWjBGMScwJQYDVQQDDB5HRTM2MCBTaWduaW5nIEJhY2t1cCBUcmFu
+          c3BvcnQxDjAMBgNVBAoMBUdFMzYwMQswCQYDVQQGEwJJVDCCAaIwDQYJKoZIhvcN
+          AQEBBQADggGPADCCAYoCggGBAJrmIP5Yf/45yjOQzrdmN9oIkqJIEYtZWFLxFFnD
+          recGrKwc+HMiy2KgR5dUCgvZC9wsxKLnuk7UzmroUs6VUFBN8SXxp80tAetKdIyl
+          jaRenSZhJzuk5YdEyHMUx2IBdHPcSKg3zZbkGpcLT+IaOprX+mKmM/vNdb8ihBGm
+          K/YSrFrdE8Xk5ghVbrxvZxW3rUb72kAnofJftddHBHwRE7IOSFlHKoFF1QFi9YQu
+          BxRwilAazXY3O3KEYZeKBL0S0klpMQhQkfir2+J9Lf4BXdBt6nwXm0nI6HeZcu5r
+          RthutK7XVCCm8MX3kMFrlXHEAGoQe1jEYqehVTe+ntIrUNYHcRnQeT9mRAjYr1gx
+          qTStSKwBhfr0ApQ5NH+veA/taI3mU+85tLcFxp7M6kWcDHT4mBQsGp8+eCS7wfs2
+          sskdp7eQ9K18M9Jj1x4T15QpPrq5Gb2d3ujp1P3wjy7SG+q0kxvF5AO8hc0B9wZG
+          umtvVKEuAfIyipJIJUcUXKcV3QIDAQABo1MwUTAdBgNVHQ4EFgQU8znGYzYUOHoK
+          Aae0fmpx4syI4M8wHwYDVR0jBBgwFoAU8znGYzYUOHoKAae0fmpx4syI4M8wDwYD
+          VR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAYEAgjM5VQn+wCkjauCrKIV2
+          N26LR+cTFktjB0YHqNftHxV+j8rl9fxB1qTlHwTrwZWcsr4IJ12zo9CiY/0Pud3U
+          CjJ/IDMN5JJBgEhCcbADI/hdjW1KcLGhQedm5m/Xg+toCxdaWK7fuWWSSBY5FkF8
+          B1NPAT5f6NMA4JVlTLBzYvd6lMS4ELCwPPgk3p3l0413lMg5LrkC6J67zfl58TkL
+          aWxLG9POr7gQU4z6HaIfR5kvlcgl1MqFZtE2toGkLhzUJOWTWleYBsN4weHk14lV
+          Z+Q5Dx3Xh75uLmo46Lt2yGuCD9PEX5D7Iqtu+/QYB5mhqXuZ1xncuh/gyDOAY8Zh
+          VNtUwqDfVLEzT+3jAK70zhQyFsNPw+CgQNMcOq0yNYL3vfPwCr3x2x8gpWsqTppX
+          sY98bcCie9OtpSWsf6df6JmeUYNdS/GasWBKjQTN7iCU8Mvvl931gbDW1l0F15B6
+          6AdRWhUgFFwTX6hvJNde4YjoDgbKSjn2vQ5FtJhSOHjy
+          -----END CERTIFICATE-----
+          CERT
+
+          mkdir -p /tmp/ge360-signing-backup
+          cp /tmp/ge360-release.jks /tmp/ge360-signing-backup/ge360-release.jks
+          cp /tmp/signing-info.txt /tmp/ge360-signing-backup/signing-info.txt
+          tar -C /tmp -czf /tmp/GE360-signing-backup.tar.gz ge360-signing-backup
+
+          openssl cms -encrypt -binary -aes256 \
+            -in /tmp/GE360-signing-backup.tar.gz \
+            -out GE360-signing-backup-encrypted.p7m \
+            -outform DER \
+            /tmp/ge360-backup-public-cert.pem
+
+          rm -f /tmp/ge360-release.jks /tmp/ge360-sign-pass.txt /tmp/signing-info.txt /tmp/GE360-signing-backup.tar.gz
+          rm -rf /tmp/ge360-signing-backup
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: GE360-Rilievo-APK
-          path: GE360-Rilievo-v1-debug.apk
+          name: GE360-Rilievo-Signed-APK
+          path: |
+            GE360-Rilievo-release-signed.apk
+            GE360-signature-verification.txt
+          retention-days: 14
+
+      - name: Upload encrypted signing backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: GE360-Rilievo-Signing-Backup-Encrypted
+          path: GE360-signing-backup-encrypted.p7m
           retention-days: 14
