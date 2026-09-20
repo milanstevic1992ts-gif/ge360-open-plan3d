@@ -1383,7 +1383,13 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     updateUI();
     render();
     closeSolver();
-    toast('Pianta sistemata ✓');
+    var repaired = solverResult && solverResult.stats ? (solverResult.stats.repairedJoints || 0) : 0;
+    var trulyClosed = !!(solverResult && solverResult.closure && solverResult.closure.closed);
+    if (trulyClosed) {
+      toast('Pianta chiusa e proporzionata ✓' + (repaired ? ' · ' + repaired + ' giunti ricuciti' : ''));
+    } else {
+      toast('Pianta sistemata · chiusura da verificare');
+    }
   }
 
   function faceKey(face) {
