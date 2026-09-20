@@ -35,6 +35,11 @@
         <button id="saveBtn" class="save-btn">SALVA</button>
       </div>
     </header>
+    <nav class="workspace-tabs" aria-label="Sezioni rilievo">
+      <button id="rawTabBtn" class="workspace-tab active">RILIEVO</button>
+      <button id="processedTabBtn" class="workspace-tab">ELABORATI</button>
+    </nav>
+    <div id="rawWorkspace" class="raw-workspace">
     <main id="stageWrap">
       <canvas id="stage"></canvas>
       <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
@@ -53,6 +58,77 @@
       <button id="measureBtn" class="tool measure"><span class="tool-icon">📏</span><span id="measureLabel">MISURE</span></button>
       <button id="doneBtn" class="tool done"><span class="tool-icon">✓</span><span>FATTO</span></button>
     </footer>
+    </div>
+
+    <section id="processedWorkspace" class="processed-workspace hidden" aria-label="Elaborati professionali">
+      <div id="processedEmpty" class="processed-empty">
+        <div class="processed-empty-icon">🧠</div>
+        <h2>Nessun elaborato ancora</h2>
+        <p>Il rilievo originale resta qui sul telefono. Quando le misure sono complete puoi far creare al backend la planimetria professionale.</p>
+        <button id="processNowBtn" class="primary block">ELABORA RILIEVO</button>
+        <button id="configureBackendBtn" class="secondary block processed-configure">CONFIGURA BACKEND RILIEVI</button>
+      </div>
+
+      <section id="processedStatusPanel" class="processing-panel hidden">
+        <div class="processing-spinner" aria-hidden="true"></div>
+        <div>
+          <div class="eyebrow dark">GE360</div>
+          <h2 id="processedStatusTitle">ELABORAZIONE IN CORSO</h2>
+          <p id="processedStatusText">Sto preparando la planimetria…</p>
+        </div>
+      </section>
+
+      <div id="staleBanner" class="stale-banner hidden">
+        <div><b>⚠️ RILIEVO MODIFICATO</b><span>L’elaborato attuale appartiene a una versione precedente.</span></div>
+        <button id="reprocessBtn">RIELABORA</button>
+      </div>
+
+      <article id="processedCard" class="processed-card hidden">
+        <div class="processed-card-head">
+          <div><div class="eyebrow dark">PLANIMETRIA ELABORATA</div><h2 id="processedTitle">Rilievo</h2></div>
+          <div id="processedQuality" class="quality-badge">✅ OK</div>
+        </div>
+
+        <div class="processed-preview-wrap">
+          <img id="processedPreview" class="processed-preview hidden" alt="Anteprima planimetria elaborata">
+          <div id="processedPreviewPlaceholder" class="processed-preview-placeholder">ANTEPRIMA NON DISPONIBILE</div>
+        </div>
+
+        <div class="processed-meta">
+          <b id="processedSummary">Elaborato professionale</b>
+          <span id="processedVersion"></span>
+          <span id="processedDate"></span>
+        </div>
+
+        <div id="processedWarnings" class="processed-warnings hidden">
+          <b>⚠️ PLANIMETRIA DA VERIFICARE</b>
+          <ul id="processedWarningsList"></ul>
+        </div>
+
+        <div class="processed-open-actions">
+          <button id="open2dBtn" class="primary">APRI 2D</button>
+          <button id="open3dBtn" class="secondary">🏠 APRI 3D</button>
+        </div>
+
+        <div id="processedFileButtons" class="processed-files"></div>
+
+        <div class="processed-main-actions">
+          <button id="shareProcessedBtn" class="secondary">📤 CONDIVIDI</button>
+          <button id="saveProcessedBtn" class="secondary">💾 SALVA</button>
+          <button id="downloadAllBtn" class="primary">📦 SCARICA TUTTO</button>
+        </div>
+
+        <details class="processed-details">
+          <summary>DETTAGLI ELABORAZIONE</summary>
+          <div>Le misure inserite nel rilievo restano la sorgente autoritativa. Warning e versioni arrivano dal backend.</div>
+        </details>
+      </article>
+
+      <section id="versionsSection" class="versions-section hidden">
+        <h3>VERSIONI</h3>
+        <div id="versionsList" class="versions-list"></div>
+      </section>
+    </section>
   </section>
 
   <div id="toolsBackdrop" class="tools-backdrop hidden">
@@ -71,6 +147,7 @@
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
         <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
         <button id="solvePlanBtn" class="tool-card solve-plan-btn hidden"><span>✨</span><b>SISTEMA PIANTA</b><small>Correggi lo schizzo</small></button>
+        <button id="elaborateBtn" class="tool-card elaborate-btn hidden"><span>🧠</span><b>ELABORA RILIEVO</b><small>Crea planimetria professionale</small></button>
         <button id="clearBtn" class="tool-card danger-tool hidden"><span>🧹</span><b>PULISCI</b><small>Cancella il disegno</small></button>
       </div>
     </section>
@@ -94,7 +171,7 @@
   <div id="settingsBackdrop" class="modal-backdrop hidden">
     <section class="settings-card">
       <div class="settings-head"><div><div class="eyebrow dark">DEBIAN</div><h2>Planner professionale</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>
-      <label>Indirizzo server<input id="serverUrl" placeholder="https://tuo-server-ge360/api/v1"></label>
+      <label>URL BACKEND RILIEVI<input id="serverUrl" placeholder="https://tuo-server-ge360/api/v1"></label>
       <label>API Key<input id="apiKey" type="password" placeholder="Incolla la chiave API"></label>
       <p class="security-note">La chiave resta sul telefono. Non viene salvata nella repo GitHub.</p>
       <div class="settings-actions"><button id="testServerBtn" class="secondary block">TEST COLLEGAMENTO</button><button id="saveSettingsBtn" class="primary block">SALVA</button></div>
@@ -231,6 +308,50 @@
       <div id="presentationSummary" class="presentation-summary"></div>
       <div id="presentationRooms" class="presentation-rooms"></div>
       <div class="presentation-foot">Superfici indicative da rilievo di cantiere · pareti lorde senza detrazione di porte e finestre.</div>
+    </section>
+  </div>
+
+
+  <div id="missingMeasuresBackdrop" class="modal-backdrop hidden">
+    <section class="missing-measures-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">MISURE MANCANTI</div><h2>Completa il rilievo</h2></div>
+        <button id="closeMissingMeasuresBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p id="missingMeasuresText">Mancano misure reali su alcuni muri.</p>
+      <button id="insertMissingMeasuresBtn" class="primary block">INSERISCI MISURE</button>
+    </section>
+  </div>
+
+  <div id="viewer2dBackdrop" class="viewer-backdrop hidden">
+    <section id="viewer2dPanel" class="viewer-panel">
+      <header class="viewer-head">
+        <div><div class="eyebrow">GE360</div><b>PLANIMETRIA 2D</b></div>
+        <button id="close2dBtn" class="viewer-close">✕</button>
+      </header>
+      <div id="viewer2dStage" class="viewer2d-stage"><img id="viewer2dImage" alt="Planimetria 2D"></div>
+      <footer class="viewer-controls">
+        <button id="fit2dBtn">ADATTA</button>
+        <button id="reset2dBtn">RESET</button>
+        <button id="fullscreen2dBtn">FULLSCREEN</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="viewer3dBackdrop" class="viewer-backdrop hidden">
+    <section id="viewer3dPanel" class="viewer-panel">
+      <header class="viewer-head">
+        <div><div class="eyebrow">GE360</div><b>MODELLO 3D</b></div>
+        <button id="close3dBtn" class="viewer-close">✕</button>
+      </header>
+      <div id="viewer3dStage" class="viewer3d-stage"></div>
+      <div id="viewer3dLoading" class="viewer-loading hidden">Caricamento 3D…</div>
+      <footer class="viewer-controls viewer-controls-3d">
+        <button id="top3dBtn">VISTA ALTO</button>
+        <button id="perspective3dBtn">VISTA 3D</button>
+        <button id="reset3dBtn">RESET</button>
+        <button id="fullscreen3dBtn">FULLSCREEN</button>
+      </footer>
     </section>
   </div>
 
