@@ -167,3 +167,45 @@
   .stage-mode-toggle{width:168px}
   .object-action-buttons{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
+
+
+/* Ambienti automatici */
+.room-auto-hint{margin-top:4px;font-size:10px;line-height:1.3;color:#b45309;font-weight:850}
+.room-photo-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin:12px 0 8px}
+.room-photo-row button{height:48px;border-radius:14px;font-weight:1000}
+.room-photo-count{min-width:58px;text-align:center;padding:8px;border-radius:12px;background:#f1f5f9;color:#64748b;font-size:10px;font-weight:1000}
+
+/* Foto rilievo */
+.tool-card.photos-btn{background:#f5f3ff;color:#6d28d9}
+.photo-gallery-card{width:100%;max-width:620px;max-height:92dvh;overflow:auto;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.3)}
+.photo-gallery-summary{margin:4px 0 12px;padding:10px 12px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;font-size:11px;font-weight:900}
+.photo-gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.photo-card{min-width:0;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;background:#fff}
+.photo-thumb-wrap{height:138px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9px;font-weight:1000;text-align:center}
+.photo-thumb{width:100%;height:100%;object-fit:cover;display:block}
+.photo-thumb-wrap.missing{padding:12px}
+.photo-card-info{position:relative;padding:9px 38px 10px 10px;display:grid;gap:3px}
+.photo-card-info b{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.photo-card-info span{font-size:9px;color:#64748b;line-height:1.25}
+.photo-delete{position:absolute;right:7px;top:7px;width:30px;height:30px;border-radius:9px;background:#fee2e2;color:#b91c1c}
+.photo-empty{grid-column:1/-1;padding:30px 16px;border-radius:16px;background:#f8fafc;color:#64748b;text-align:center;font-size:12px;line-height:1.4}
+.photo-storage-note{margin:12px 2px 0;color:#94a3b8;font-size:9px;line-height:1.35}
+
+/* Computo progressivo */
+.tool-card.takeoff-btn{background:#ecfeff;color:#0e7490}
+.takeoff-card{width:100%;max-width:620px;max-height:92dvh;overflow:auto;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.3)}
+.takeoff-summary{margin:4px 0 10px;padding:11px 12px;border-radius:15px;background:#ecfeff;border:1px solid #a5f3fc;color:#155e75;display:grid;gap:2px}
+.takeoff-summary b{font-size:13px}.takeoff-summary span{font-size:10px}
+.takeoff-rows{display:grid;gap:7px}
+.takeoff-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border-radius:14px;background:#f8fafc;border-left:4px solid #64748b}
+.takeoff-row.demolition{border-left-color:#dc2626}.takeoff-row.construction{border-left-color:#2563eb}.takeoff-row.finish{border-left-color:#d97706}.takeoff-row.general{border-left-color:#7c3aed}
+.takeoff-row-main{min-width:0;display:grid;gap:2px}.takeoff-row-main b{font-size:11px}.takeoff-row-main span{font-size:9px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.takeoff-value{white-space:nowrap;font-size:14px;font-weight:1000;color:#0f172a}
+.takeoff-unresolved{margin-top:10px;padding:10px 11px;border-radius:14px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:10px;line-height:1.45}
+.takeoff-unresolved b{display:block;margin-bottom:4px}
+.takeoff-note{margin:10px 2px 0;color:#64748b;font-size:9px;line-height:1.35}
+
+@media(max-width:390px){
+  .photo-gallery{grid-template-columns:1fr}
+  .photo-thumb-wrap{height:180px}
+}
