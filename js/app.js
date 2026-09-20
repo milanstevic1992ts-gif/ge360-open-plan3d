@@ -28,8 +28,23 @@ import {
   findTJunctionCandidates
 } from './editor-geometry.js';
 import { syncDetectedRooms } from './auto-rooms.js';
-import { savePhoto, getPhoto, deletePhoto, listPlanPhotos, compressPhoto } from './photo-store.js';
+import { savePhoto, getPhoto, updatePhotoMetadata, deletePhoto, listPlanPhotos, compressPhoto } from './photo-store.js';
 import { buildProgressiveTakeoff } from './takeoff.js';
+import {
+  createPlanBackup,
+  listPlanBackups,
+  getPlanBackup,
+  deletePlanBackups
+} from './backup-store.js';
+import {
+  SITE_STATUSES,
+  createSite,
+  normalizeSite,
+  siteLabel,
+  statusLabel,
+  siteStats,
+  plansForSite
+} from './sites.js';
 
 (function () {
   'use strict';
@@ -41,8 +56,13 @@ import { buildProgressiveTakeoff } from './takeoff.js';
 
   var LIBRARY_KEY = 'ge360-rilievo-library-v3';
   var SETTINGS_KEY = 'ge360-rilievo-settings-v1';
+  var SITES_KEY = 'ge360-cantieri-v1';
 
   var library = [];
+  var sites = [];
+  var activeSiteFilter = 'all';
+  var editingSiteId = null;
+  var siteModalAttachPlanId = null;
   var settings = { serverUrl: '', apiKey: '' };
   var activePlanId = null;
   var mode = 'draw';
@@ -67,7 +87,10 @@ import { buildProgressiveTakeoff } from './takeoff.js';
   var annotationDrag = null;
   var photoRefs = [];
   var pendingPhotoTarget = null;
+  var pendingPhotoPlacement = null;
   var photoObjectUrls = [];
+  var backupTimer = null;
+  var backupInFlight = false;
   var dpr = 1;
   var viewZoom = 1;
   var viewRotation = 0;
