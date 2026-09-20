@@ -205,8 +205,14 @@ export function applyBackendSnapshot(plan, payload = {}) {
   backend.lastProcessedAt = payload.lastProcessedAt || payload.last_processed_at || payload.processedAt || payload.processed_at || backend.lastProcessedAt;
   backend.needsReview = Boolean(payload.needsReview ?? payload.needs_review ?? (backend.status === 'NEEDS_REVIEW'));
   backend.warnings = Array.isArray(payload.warnings) ? payload.warnings : backend.warnings;
-  backend.summary = { ...backend.summary, ...normalizeSummary(payload.summary || payload) };
-  backend.files = { ...backend.files, ...normalizeFiles(payload.files || payload.artifacts || payload.outputs || payload) };
+  const incomingSummary = normalizeSummary(payload.summary || payload);
+  if (incomingSummary.rooms != null) backend.summary.rooms = incomingSummary.rooms;
+  if (incomingSummary.floorAreaM2 != null) backend.summary.floorAreaM2 = incomingSummary.floorAreaM2;
+
+  const incomingFiles = normalizeFiles(payload.files || payload.artifacts || payload.outputs || payload);
+  Object.entries(incomingFiles).forEach(([key, value]) => {
+    if (value) backend.files[key] = value;
+  });
   backend.error = payload.error || payload.detail || (backend.status === 'ERROR' ? 'Elaborazione non completata' : null);
 
   const revision = payload.sourceRevision || payload.source_revision;
