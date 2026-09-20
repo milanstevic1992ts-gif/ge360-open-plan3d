@@ -2,6 +2,11 @@ name: GE360 Rilievo APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - frontend-backend-elaborati-v1
+    paths:
+      - ".github/apk-build-trigger"
 
 permissions:
   contents: read
