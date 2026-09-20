@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9 ]
   workflow_dispatch:
 
 permissions:
@@ -165,6 +165,19 @@ jobs:
           grep -q "rooms: list" backend/app.py
           grep -q "wallHeightM: float" backend/app.py
           grep -q "surfaces: dict" backend/app.py
+
+      - name: Check construction notes and Debian LLM integration
+        run: |
+          grep -q 'id="notesBtn"' index.html
+          grep -q 'id="noteRawText"' index.html
+          grep -q 'id="rewriteNoteBtn"' index.html
+          grep -q "plan.notes = clone(notes)" js/app.js
+          grep -q "notes: plan.notes || \[\]" js/app.js
+          grep -q "settings.serverUrl + '/notes/rewrite'" js/app.js
+          grep -q '@app.post("/api/v1/notes/rewrite"' backend/app.py
+          grep -q "require_key(x_ge360_api_key)" backend/app.py
+          grep -q "OLLAMA_BASE_URL" backend/app.py
+          grep -q "OLLAMA_MODEL" backend/app.py
 
       - name: Verify engine stays isolated
         run: |
