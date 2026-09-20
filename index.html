@@ -43,6 +43,7 @@
         <button id="rotateBtn" class="rotate-view" aria-label="Ruota planimetria di 90 gradi">↻ 90°</button>
       </div>
       <div class="work-actions">
+        <button id="notesBtn" class="notes-btn hidden">📝 APPUNTI</button>
         <button id="presentBtn" class="present-btn hidden">👁 PRESENTA</button>
         <button id="roomBtn" class="room-btn hidden">🏷 AMBIENTE</button>
         <button id="surfacesBtn" class="surfaces-btn hidden">📐 SUPERFICI</button>
@@ -147,6 +148,53 @@
       <div id="surfaceTotals" class="surface-totals"></div>
       <div class="surface-note">Calcolo <b>indicativo da cantiere</b>: piccoli gap vengono chiusi automaticamente per stimare i m². Pareti lorde: porte e finestre non vengono sottratte. Il soffitto viene considerato uguale al pavimento.</div>
       <div id="surfaceRooms" class="surface-rooms"></div>
+    </section>
+  </div>
+
+  <div id="noteTargetBackdrop" class="modal-backdrop hidden">
+    <section class="note-target-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">APPUNTI DI CANTIERE</div><h2>Cosa vuoi annotare?</h2></div>
+        <button id="closeNoteTargetBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div class="note-target-grid">
+        <button data-note-target="room">🏠<span>AMBIENTE</span></button>
+        <button data-note-target="floor">▰<span>PAVIMENTO</span></button>
+        <button data-note-target="ceiling">▱<span>SOFFITTO</span></button>
+        <button data-note-target="wall">▮<span>MURO</span></button>
+        <button data-note-target="opening">🚪<span>PORTA / FINESTRA</span></button>
+      </div>
+      <p class="note-target-help">Scegli il tipo, poi tocca direttamente l'elemento sulla pianta.</p>
+    </section>
+  </div>
+
+  <div id="noteEditorBackdrop" class="modal-backdrop hidden">
+    <section class="note-editor-card">
+      <div class="settings-head">
+        <div>
+          <div class="eyebrow dark">APPUNTO</div>
+          <h2 id="noteTargetTitle">Elemento</h2>
+          <div id="noteTargetMeta" class="note-target-meta"></div>
+        </div>
+        <button id="closeNoteEditorBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+
+      <label class="note-label">Appunto grezzo
+        <textarea id="noteRawText" rows="7" placeholder="Es. togli piastrelle, sistemare tracce idraulico, impermeabilizzare doccia e nuove fino 120..."></textarea>
+      </label>
+
+      <div id="noteAiResult" class="note-ai-result hidden">
+        <div class="note-ai-head">✨ VERSIONE SISTEMATA</div>
+        <div id="noteCleanedText" class="note-cleaned-text"></div>
+        <div id="noteTasks" class="note-tasks"></div>
+        <div id="noteClarifications" class="note-clarifications"></div>
+      </div>
+
+      <div class="note-actions">
+        <button id="saveRawNoteBtn" class="secondary">SALVA GREZZO</button>
+        <button id="rewriteNoteBtn" class="primary">✨ SISTEMA CON IA</button>
+      </div>
+      <button id="deleteNoteBtn" class="delete-opening hidden">🗑 ELIMINA APPUNTO</button>
     </section>
   </div>
 
