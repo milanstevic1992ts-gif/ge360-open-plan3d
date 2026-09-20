@@ -2807,10 +2807,23 @@ import {
     render();
   }
 
+  function setEditorLayer(layer, announce) {
+    editorLayer = layer === 'works' ? 'works' : 'survey';
+    $('surveyViewBtn').classList.toggle('active', editorLayer === 'survey');
+    $('worksViewBtn').classList.toggle('active', editorLayer === 'works');
+    hideObjectActionBar();
+    persistActive();
+    render();
+    if (announce !== false) toast(editorLayer === 'works' ? 'Vista interventi' : 'Vista rilievo');
+  }
+
   function updateUI() {
     var has = walls.length > 0;
     $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
     $('statusPill').classList.toggle('hidden', !has);
+    $('stageModeToggle').classList.toggle('hidden', !has);
+    $('surveyViewBtn').classList.toggle('active', editorLayer === 'survey');
+    $('worksViewBtn').classList.toggle('active', editorLayer === 'works');
     $('toolsBtn').classList.toggle('hidden', !has);
     $('clearBtn').classList.toggle('hidden', !has);
     $('solvePlanBtn').classList.toggle('hidden', !has);
@@ -2824,6 +2837,7 @@ import {
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
+    updateHistoryButtons();
   }
 
   function drawPolyline(points, color, width) {
@@ -3298,7 +3312,14 @@ import {
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
-  $('notesBtn').addEventListener('click', function () { runTool(openNoteTargetChooser); });
+  $('notesBtn').addEventListener('click', function () {
+    runTool(function () {
+      setEditorLayer('works', false);
+      openNoteTargetChooser();
+    });
+  });
+  $('surveyViewBtn').addEventListener('click', function () { setEditorLayer('survey'); });
+  $('worksViewBtn').addEventListener('click', function () { setEditorLayer('works'); });
   $('roomBtn').addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
