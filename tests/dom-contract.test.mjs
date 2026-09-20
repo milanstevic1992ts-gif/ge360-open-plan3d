@@ -48,8 +48,10 @@ test('AMBIENTE non apre PRESENTA e chiude eventuali overlay di presentazione',()
   assert.doesNotMatch(app,/roomBtn'\)\.addEventListener\('click',[^\n]*openPresentation/);
 });
 
-test('PRESENTA conserva la geometria visiva originale del rilievo',()=>{
-  assert.match(app,/presentationModel = \{[\s\S]*walls: clone\(walls\),[\s\S]*calculationWalls: calculationWalls/);
+test('PRESENTA usa la geometria proporzionata solo quando il solver ha chiuso davvero',()=>{
+  assert.match(app,/var solvedClosed = !!\([\s\S]*solved\.result\.closure\.closed/);
+  assert.match(app,/var displayWalls = solvedClosed \? clone\(solved\.walls\) : clone\(walls\)/);
+  assert.match(app,/walls: displayWalls/);
   assert.match(app,/var displayFaces = buildFaces\(pwalls\)/);
 });
 
