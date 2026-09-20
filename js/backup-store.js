@@ -101,7 +101,19 @@ export function safeSnapshot(plan) {
 }
 
 export function fingerprintSnapshot(plan) {
-  const data=JSON.stringify(sortValue(plan || {}));
+  const p=plan || {};
+  const significant={
+    siteId:p.siteId || null,
+    rawStrokes:p.rawStrokes || [],
+    walls:p.walls || [],
+    openings:p.openings || [],
+    rooms:p.rooms || [],
+    notes:p.notes || [],
+    photos:p.photos || [],
+    wallHeightM:p.wallHeightM || 2.7,
+    liveScaleCmPerUnit:p.liveScaleCmPerUnit || null
+  };
+  const data=JSON.stringify(sortValue(significant));
   let hash=0x811c9dc5;
   for (let i=0;i<data.length;i++) {
     hash^=data.charCodeAt(i);
