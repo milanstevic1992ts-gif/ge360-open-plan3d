@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14, auto-straight-walls-v16 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14, auto-straight-walls-v16, corner-magnet-v18 ]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
-          import { straightenPolyline, snapOrientation } from './js/sketch-snap.js';
+          import { straightenPolyline, snapOrientation, snapPolylineCornersToWalls } from './js/sketch-snap.js';
 
           assert.equal(snapOrientation(200, 22, 25), 'h');
           assert.equal(snapOrientation(18, 220, 25), 'v');
@@ -62,8 +62,40 @@ jobs:
           assert.equal(room[2].y, room[3].y);
           assert.equal(room[3].x, room[4].x);
 
+          const existingVertical = [
+            { id:'old-v', a:{x:100,y:100}, b:{x:100,y:300}, lengthCm:200 }
+          ];
+          const incomingHorizontal = [{x:126,y:112},{x:300,y:112}];
+          const corner = snapPolylineCornersToWalls(incomingHorizontal, existingVertical, {
+            threshold: 40,
+            axisToleranceDeg: 25
+          });
+          assert.equal(corner.wallUpdates.length, 1);
+          assert.equal(corner.wallUpdates[0].mode, 'orthogonal');
+          assert.equal(corner.points[0].x, 100);
+          assert.equal(corner.points[0].y, 112);
+          assert.equal(corner.wallUpdates[0].point.x, 100);
+          assert.equal(corner.wallUpdates[0].point.y, 112);
+
+          const existingEnd = [
+            { id:'old-h', a:{x:0,y:0}, b:{x:100,y:0}, lengthCm:100 }
+          ];
+          const continuation = [{x:112,y:7},{x:200,y:80}];
+          const endpoint = snapPolylineCornersToWalls(continuation, existingEnd, {
+            threshold: 20,
+            axisToleranceDeg: 25
+          });
+          assert.equal(endpoint.points[0].x, 100);
+          assert.equal(endpoint.points[0].y, 0);
+
           console.log('GE360 sketch straightening smoke tests OK');
           NODE
+
+      - name: Check corner magnet integration
+        run: |
+          grep -q "snapPolylineCornersToWalls" js/app.js
+          grep -q "threshold: 46 / viewZoom" js/app.js
+          grep -q "originalPoint" js/app.js
 
       - name: Geometry engine smoke tests
         run: |
