@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 API_KEY = os.environ.get("GE360_RILIEVO_API_KEY", "")
@@ -30,6 +30,8 @@ app.add_middleware(
 
 
 class PlanPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     version: int = 4
     kind: str = "ge360-rough-survey"
     planId: str
