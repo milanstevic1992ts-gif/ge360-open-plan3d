@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11 ]
   workflow_dispatch:
 
 permissions:
@@ -179,6 +179,14 @@ jobs:
           grep -q "notes = notes.filter" js/app.js
           grep -q "z-index:400" css/app.css
           grep -q "z-index:8" css/app.css
+
+      - name: Check note draft safety and room relabeling
+        run: |
+          grep -q "function closeNoteEditor(saveDraft)" js/app.js
+          grep -q "saveCurrentNote(true)" js/app.js
+          grep -q "closeNoteEditor(false)" js/app.js
+          grep -q "note.targetType === 'wall'" js/app.js
+          grep -q "note.targetType === 'opening'" js/app.js
 
       - name: Check construction notes and Debian LLM integration
         run: |
