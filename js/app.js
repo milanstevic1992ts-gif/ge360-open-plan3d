@@ -42,6 +42,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   var selectedRoomName = '';
   var surfaceCache = null;
   var presentationModel = null;
+  var notes = [];
+  var notePickMode = null;
+  var pendingNoteTarget = null;
+  var currentNoteId = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -93,6 +97,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       doors: os.filter(function (o) { return o.type === 'door'; }).length,
       windows: os.filter(function (o) { return o.type === 'window'; }).length,
       rooms: plan ? (plan.rooms || []).length : rooms.length,
+      notes: plan ? (plan.notes || []).length : notes.length,
       floorM2: plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null
     };
   }
@@ -106,6 +111,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     plan.walls = clone(walls);
     plan.openings = clone(openings);
     plan.rooms = clone(rooms);
+    plan.notes = clone(notes);
     plan.wallHeightM = wallHeightM;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
@@ -116,6 +122,8 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 
   function showDashboard() {
     closeSheet();
+    closeNoteEditor();
+    closeNoteTargetChooser();
     $('editor').classList.add('hidden');
     $('dashboard').classList.remove('hidden');
     activePlanId = null;
@@ -139,6 +147,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       walls: [],
       openings: [],
       rooms: [],
+      notes: [],
       wallHeightM: 2.70,
       view: { zoom: 1, rotation: 0 }
     };
@@ -155,6 +164,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     walls = clone(plan.walls || []);
     openings = clone(plan.openings || []);
     rooms = clone(plan.rooms || []);
+    notes = clone(plan.notes || []);
+    notePickMode = null;
+    pendingNoteTarget = null;
+    currentNoteId = null;
     wallHeightM = Number.isFinite(plan.wallHeightM) && plan.wallHeightM > 0 ? plan.wallHeightM : 2.70;
     surfaceCache = null;
     roomPickMode = false;
@@ -213,7 +226,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       h3.textContent = plan.name || 'Rilievo';
       var meta = document.createElement('div');
       meta.className = 'plan-meta';
-      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m² · ' : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
+      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m² · ' : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
 
       var actions = document.createElement('div');
       actions.className = 'plan-actions';
@@ -269,7 +282,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, wallHeightM: wallHeightM }));
+    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, wallHeightM: wallHeightM }));
     if (history.length > 30) history.shift();
   }
 
@@ -280,6 +293,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     walls = data.walls || [];
     openings = data.openings || [];
     rooms = data.rooms || [];
+    notes = data.notes || [];
     wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
     surfaceCache = null;
     closeSheet();
@@ -531,6 +545,314 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     setMode('measure');
   }
 
+  function noteTargetKey(type, id) {
+    return String(type) + ':' + String(id || '');
+  }
+
+  function faceRoom(face) {
+    if (!face) return null;
+    var key = faceKey(face);
+    return rooms.find(function (r) {
+      return r.faceKey === key || faceKey({ wallIds: r.wallIds }) === key;
+    }) || null;
+  }
+
+  function roomForWall(wallId) {
+    return rooms.find(function (r) {
+      return Array.isArray(r.wallIds) && r.wallIds.indexOf(wallId) !== -1;
+    }) || null;
+  }
+
+  function openNoteTargetChooser() {
+    if (!walls.length) return toast('Prima disegna la pianta');
+    $('noteTargetBackdrop').classList.remove('hidden');
+  }
+
+  function closeNoteTargetChooser() {
+    $('noteTargetBackdrop').classList.add('hidden');
+  }
+
+  function startNotePick(type) {
+    notePickMode = type;
+    closeNoteTargetChooser();
+    $('notesBtn').classList.add('active');
+    var label = type === 'wall' ? 'un muro'
+      : type === 'opening' ? 'una porta o finestra'
+      : type === 'floor' ? 'dentro il pavimento dell’ambiente'
+      : type === 'ceiling' ? 'dentro l’ambiente del soffitto'
+      : 'dentro l’ambiente';
+    toast('Tocca ' + label);
+  }
+
+  function buildRoomTarget(type, face) {
+    var room = faceRoom(face);
+    var name = room ? room.name : 'Ambiente non nominato';
+    var id = room ? room.id : faceKey(face);
+    var cache = surfaceCache || refreshSurfaceCache();
+    var metric = null;
+    if (room && cache && cache.roomMetrics) {
+      metric = cache.roomMetrics.find(function (m) { return m.room.id === room.id; }) || null;
+    }
+    var prefix = type === 'floor' ? 'Pavimento' : type === 'ceiling' ? 'Soffitto' : 'Ambiente';
+    return {
+      type: type,
+      id: id,
+      label: prefix + ' · ' + name,
+      roomName: name,
+      context: {
+        areaM2: metric && Number.isFinite(metric.floorM2) ? Number(metric.floorM2.toFixed(2)) : null,
+        ceilingM2: metric && Number.isFinite(metric.ceilingM2) ? Number(metric.ceilingM2.toFixed(2)) : null,
+        wallHeightM: wallHeightM
+      }
+    };
+  }
+
+  function handleNotePick(p) {
+    var type = notePickMode;
+    notePickMode = null;
+    $('notesBtn').classList.remove('active');
+    if (!type) return false;
+
+    var target = null;
+
+    if (type === 'wall') {
+      var wh = nearestWall(p);
+      if (!wh) {
+        toast('Tocca più vicino a un muro');
+        return true;
+      }
+      var wall = wh.wall;
+      var room = roomForWall(wall.id);
+      var idx = walls.findIndex(function (w) { return w.id === wall.id; });
+      target = {
+        type: 'wall',
+        id: wall.id,
+        label: 'Muro ' + (idx + 1) + (room ? ' · ' + room.name : ''),
+        roomName: room ? room.name : null,
+        context: {
+          lengthM: Number.isFinite(wall.lengthCm) ? wall.lengthCm / 100 : null,
+          wallHeightM: wallHeightM,
+          grossAreaM2: Number.isFinite(wall.lengthCm) ? Number(((wall.lengthCm / 100) * wallHeightM).toFixed(2)) : null
+        }
+      };
+    } else if (type === 'opening') {
+      var oh = nearestOpening(p);
+      if (!oh) {
+        toast('Tocca più vicino a una porta o finestra');
+        return true;
+      }
+      var opening = oh.opening;
+      var oroom = roomForWall(opening.wallId);
+      target = {
+        type: 'opening',
+        id: opening.id,
+        label: (opening.type === 'door' ? 'Porta' : 'Finestra') + (oroom ? ' · ' + oroom.name : ''),
+        roomName: oroom ? oroom.name : null,
+        context: {
+          openingType: opening.type,
+          widthM: Number.isFinite(opening.widthCm) ? opening.widthCm / 100 : null,
+          offsetM: Number.isFinite(opening.offsetCm) ? opening.offsetCm / 100 : null,
+          referenceEnd: opening.referenceEnd || null
+        }
+      };
+    } else {
+      var face = findFaceAtPoint(walls, p);
+      if (!face) {
+        toast('Non riconosco un ambiente qui');
+        return true;
+      }
+      target = buildRoomTarget(type, face);
+    }
+
+    openNoteEditor(target);
+    return true;
+  }
+
+  function existingNoteForTarget(target) {
+    var key = noteTargetKey(target.type, target.id);
+    return notes.find(function (n) { return n.targetKey === key; }) || null;
+  }
+
+  function renderNoteAi(note) {
+    var box = $('noteAiResult');
+    var cleaned = note && note.cleanedText ? String(note.cleanedText) : '';
+    var tasks = note && Array.isArray(note.tasks) ? note.tasks : [];
+    var clarifications = note && Array.isArray(note.needsClarification) ? note.needsClarification : [];
+
+    if (!cleaned && !tasks.length && !clarifications.length) {
+      box.classList.add('hidden');
+      $('noteCleanedText').textContent = '';
+      $('noteTasks').innerHTML = '';
+      $('noteClarifications').innerHTML = '';
+      return;
+    }
+
+    box.classList.remove('hidden');
+    $('noteCleanedText').textContent = cleaned;
+
+    var tasksEl = $('noteTasks');
+    tasksEl.innerHTML = '';
+    tasks.forEach(function (task) {
+      var el = document.createElement('div');
+      el.className = 'note-task';
+      el.textContent = task;
+      tasksEl.appendChild(el);
+    });
+
+    var clarEl = $('noteClarifications');
+    clarEl.innerHTML = '';
+    clarifications.forEach(function (item) {
+      var el = document.createElement('div');
+      el.className = 'note-clarification';
+      el.textContent = item;
+      clarEl.appendChild(el);
+    });
+  }
+
+  function openNoteEditor(target) {
+    pendingNoteTarget = target;
+    var existing = existingNoteForTarget(target);
+    currentNoteId = existing ? existing.id : null;
+    $('noteTargetTitle').textContent = target.label;
+    $('noteTargetMeta').textContent = target.roomName ? 'Ambiente: ' + target.roomName : '';
+    $('noteRawText').value = existing ? existing.rawText || '' : '';
+    $('deleteNoteBtn').classList.toggle('hidden', !existing);
+    renderNoteAi(existing);
+    $('noteEditorBackdrop').classList.remove('hidden');
+    requestAnimationFrame(function () { $('noteRawText').focus(); });
+  }
+
+  function closeNoteEditor() {
+    $('noteEditorBackdrop').classList.add('hidden');
+    pendingNoteTarget = null;
+    currentNoteId = null;
+  }
+
+  function saveCurrentNote(silent) {
+    if (!pendingNoteTarget) return null;
+    var raw = $('noteRawText').value.trim();
+    if (!raw) {
+      if (!silent) toast('Scrivi prima un appunto');
+      return null;
+    }
+
+    var existing = currentNoteId ? notes.find(function (n) { return n.id === currentNoteId; }) : existingNoteForTarget(pendingNoteTarget);
+    if (!existing) {
+      checkpoint();
+      existing = {
+        id: uid('note'),
+        targetKey: noteTargetKey(pendingNoteTarget.type, pendingNoteTarget.id),
+        targetType: pendingNoteTarget.type,
+        targetId: pendingNoteTarget.id,
+        targetLabel: pendingNoteTarget.label,
+        roomName: pendingNoteTarget.roomName || null,
+        context: clone(pendingNoteTarget.context || {}),
+        rawText: raw,
+        cleanedText: '',
+        tasks: [],
+        needsClarification: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      notes.push(existing);
+      currentNoteId = existing.id;
+    } else {
+      checkpoint();
+      if (existing.rawText !== raw) {
+        existing.cleanedText = '';
+        existing.tasks = [];
+        existing.needsClarification = [];
+        existing.model = null;
+        existing.rewrittenAt = null;
+      }
+      existing.rawText = raw;
+      existing.targetLabel = pendingNoteTarget.label;
+      existing.roomName = pendingNoteTarget.roomName || null;
+      existing.context = clone(pendingNoteTarget.context || {});
+      existing.updatedAt = new Date().toISOString();
+    }
+
+    persistActive();
+    updateUI();
+    $('deleteNoteBtn').classList.remove('hidden');
+    renderNoteAi(existing);
+    if (!silent) toast('Appunto salvato ✓');
+    return existing;
+  }
+
+  async function rewriteCurrentNote() {
+    var note = saveCurrentNote(true);
+    if (!note) return toast('Scrivi prima un appunto');
+    if (!settings.serverUrl || !settings.apiKey) {
+      toast('Configura prima il Debian');
+      openSettings();
+      return;
+    }
+
+    var btn = $('rewriteNoteBtn');
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'IA IN LAVORAZIONE…';
+
+    try {
+      var plan = currentPlan();
+      var res = await fetch(settings.serverUrl + '/notes/rewrite', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-GE360-API-Key': settings.apiKey
+        },
+        body: JSON.stringify({
+          rawText: note.rawText,
+          planId: activePlanId,
+          planName: plan ? plan.name : null,
+          targetType: note.targetType,
+          targetId: note.targetId,
+          targetLabel: note.targetLabel,
+          roomName: note.roomName,
+          context: note.context || {}
+        })
+      });
+
+      if (!res.ok) {
+        var detail = '';
+        try {
+          var err = await res.json();
+          detail = err.detail || '';
+        } catch (_) {}
+        throw new Error(detail || ('HTTP ' + res.status));
+      }
+
+      var data = await res.json();
+      note.cleanedText = data.cleanedText || note.rawText;
+      note.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      note.needsClarification = Array.isArray(data.needsClarification) ? data.needsClarification : [];
+      note.model = data.model || null;
+      note.rewrittenAt = new Date().toISOString();
+      note.updatedAt = note.rewrittenAt;
+      persistActive();
+      renderNoteAi(note);
+      toast('Appunto sistemato ✓');
+    } catch (e) {
+      toast('IA non disponibile: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  function deleteCurrentNote() {
+    var note = currentNoteId ? notes.find(function (n) { return n.id === currentNoteId; }) : null;
+    if (!note) return;
+    if (!confirm('Eliminare questo appunto?')) return;
+    checkpoint();
+    notes = notes.filter(function (n) { return n.id !== note.id; });
+    persistActive();
+    updateUI();
+    closeNoteEditor();
+    toast('Appunto eliminato');
+  }
+
   function setMode(next, announce) {
     mode = next;
     [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure']].forEach(function (pair) {
@@ -736,6 +1058,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       walls: plan.walls || [],
       openings: plan.openings || [],
       rooms: plan.rooms || [],
+      notes: plan.notes || [],
       wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
       surfaces: plan.surfaceSummary || null,
       summary: summary(plan)
@@ -1511,6 +1834,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     walls = [];
     openings = [];
     rooms = [];
+    notes = [];
+    notePickMode = null;
+    pendingNoteTarget = null;
+    currentNoteId = null;
     surfaceCache = null;
     persistActive();
     updateUI();
@@ -1526,6 +1853,8 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     $('roomBtn').classList.toggle('hidden', !has);
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
+    $('notesBtn').classList.toggle('hidden', !has);
+    $('notesBtn').textContent = '📝 APPUNTI' + (notes.length ? ' ' + notes.length : '');
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
@@ -1672,6 +2001,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       handleRoomPick(p);
       return;
     }
+    if (notePickMode) {
+      handleNotePick(p);
+      return;
+    }
     if (mode === 'draw') {
       activePointerId = e.pointerId;
       if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
@@ -1726,6 +2059,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
+  $('notesBtn').addEventListener('click', openNoteTargetChooser);
   $('roomBtn').addEventListener('click', openRoomPicker);
   $('surfacesBtn').addEventListener('click', openSurfaces);
   $('presentBtn').addEventListener('click', openPresentation);
@@ -1747,6 +2081,16 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   });
   $('closeSurfacesBtn').addEventListener('click', closeSurfaces);
   $('surfacesBackdrop').addEventListener('click', function (e) { if (e.target === $('surfacesBackdrop')) closeSurfaces(); });
+  $('closeNoteTargetBtn').addEventListener('click', closeNoteTargetChooser);
+  $('noteTargetBackdrop').addEventListener('click', function (e) { if (e.target === $('noteTargetBackdrop')) closeNoteTargetChooser(); });
+  document.querySelectorAll('[data-note-target]').forEach(function (b) {
+    b.addEventListener('click', function () { startNotePick(b.dataset.noteTarget); });
+  });
+  $('closeNoteEditorBtn').addEventListener('click', closeNoteEditor);
+  $('noteEditorBackdrop').addEventListener('click', function (e) { if (e.target === $('noteEditorBackdrop')) closeNoteEditor(); });
+  $('saveRawNoteBtn').addEventListener('click', function () { saveCurrentNote(false); });
+  $('rewriteNoteBtn').addEventListener('click', rewriteCurrentNote);
+  $('deleteNoteBtn').addEventListener('click', deleteCurrentNote);
   $('wallHeightInput').addEventListener('change', changeWallHeight);
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
