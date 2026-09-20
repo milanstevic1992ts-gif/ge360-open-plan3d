@@ -47,6 +47,11 @@ export async function savePhoto(record) {
     mime:String(record.mime || record.blob.type || 'image/jpeg'),
     size:Number(record.blob.size || 0),
     createdAt:record.createdAt || new Date().toISOString(),
+    cameraPoint:record.cameraPoint && Number.isFinite(record.cameraPoint.x) && Number.isFinite(record.cameraPoint.y)
+      ? {x:Number(record.cameraPoint.x),y:Number(record.cameraPoint.y)} : null,
+    targetPoint:record.targetPoint && Number.isFinite(record.targetPoint.x) && Number.isFinite(record.targetPoint.y)
+      ? {x:Number(record.targetPoint.x),y:Number(record.targetPoint.y)} : null,
+    directionDeg:Number.isFinite(record.directionDeg) ? Number(record.directionDeg) : null,
     blob:record.blob
   };
   await txRequest('readwrite',store=>store.put(data));
@@ -55,6 +60,17 @@ export async function savePhoto(record) {
 
 export async function getPhoto(id) {
   return txRequest('readonly',store=>store.get(String(id)));
+}
+
+export async function updatePhotoMetadata(id, patch={}) {
+  const current=await getPhoto(id);
+  if (!current) throw new Error('Foto non trovata');
+  const next={...current,...patch,id:current.id,blob:current.blob};
+  next.targetType=String(next.targetType || 'plan');
+  next.targetId=String(next.targetId || '');
+  next.targetKey=next.targetType+':'+next.targetId;
+  await txRequest('readwrite',store=>store.put(next));
+  return photoMeta(next);
 }
 
 export async function deletePhoto(id) {
@@ -112,6 +128,11 @@ export function photoMeta(record) {
     mime:String(record.mime || 'image/jpeg'),
     size:Number(record.size || 0),
     createdAt:record.createdAt || null,
+    cameraPoint:record.cameraPoint && Number.isFinite(record.cameraPoint.x) && Number.isFinite(record.cameraPoint.y)
+      ? {x:Number(record.cameraPoint.x),y:Number(record.cameraPoint.y)} : null,
+    targetPoint:record.targetPoint && Number.isFinite(record.targetPoint.x) && Number.isFinite(record.targetPoint.y)
+      ? {x:Number(record.targetPoint.x),y:Number(record.targetPoint.y)} : null,
+    directionDeg:Number.isFinite(record.directionDeg) ? Number(record.directionDeg) : null,
     localOnly:true
   };
 }
