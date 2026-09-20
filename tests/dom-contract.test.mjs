@@ -142,3 +142,33 @@ test('T junction non trasforma una stima grafica in misura certa',()=>{
   assert.match(app,/var derived = wall\.measurementSource === 'derived_t_split'/);
   assert.match(app,/quote di segmenti T sono stimate dalla posizione dello schizzo/);
 });
+
+
+test('ambienti automatici vengono sincronizzati e richiesti quando la geometria chiude',()=>{
+  assert.match(app,/syncDetectedRooms/);
+  assert.match(app,/function syncAutomaticRooms\(/);
+  assert.match(app,/function openRoomEditorForFace\(/);
+  assert.match(app,/syncAutomaticRooms\(true\)/);
+  assert.match(html,/id="roomAutoHint"/);
+});
+
+test('foto rilievo usa IndexedDB e mantiene i blob fuori dal piano',()=>{
+  assert.match(html,/id="photoInput"/);
+  assert.match(html,/id="objectPhotoBtn"/);
+  assert.match(html,/id="photosBackdrop"/);
+  assert.match(html,/id="photoGallery"/);
+  assert.match(app,/savePhoto\(/);
+  assert.match(app,/compressPhoto\(/);
+  assert.match(app,/function capturePhotoForTarget\(/);
+  assert.match(app,/function openPhotosGallery\(/);
+  assert.match(app,/orphanPhotosForTarget\(/);
+});
+
+test('computo live aggrega quantità dagli interventi',()=>{
+  assert.match(html,/id="takeoffBtn"/);
+  assert.match(html,/id="takeoffBackdrop"/);
+  assert.match(html,/id="takeoffRows"/);
+  assert.match(app,/buildProgressiveTakeoff\(/);
+  assert.match(app,/function renderTakeoff\(/);
+  assert.match(app,/function openTakeoff\(/);
+});
