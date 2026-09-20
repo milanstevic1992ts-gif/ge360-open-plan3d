@@ -797,14 +797,17 @@ import {
 
   function startOpeningMoveDrag(e, p) {
     if (!openingMoveMode) return false;
-    if (!updateOpeningMoveAt(p)) {
-      var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    var wall = opening ? walls.find(function (w) { return w.id === opening.wallId; }) : null;
+    var hit = wall ? distToSegment(p, wall.a, wall.b) : null;
+    if (!hit || hit.distance > 55 / viewZoom) {
       toast('Trascina sul muro della ' + (opening && opening.type === 'window' ? 'finestra' : 'porta'));
       return true;
     }
     checkpoint();
     openingMoveMode.dragging = true;
     openingMoveMode.pointerId = e.pointerId;
+    updateOpeningMoveAt(p);
     if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
     vibrate(12);
     return true;
@@ -2794,6 +2797,13 @@ import {
       return !Number.isFinite(o.widthCm) || o.widthCm <= 0 || !Number.isFinite(o.offsetCm) || o.offsetCm < 0;
     });
     if (badOpenings.length) checks.push({level:'error',text:badOpenings.length + ' porte/finestre con quote incomplete'});
+
+    var openingsOutside = openings.filter(function (o) {
+      var wall = walls.find(function (w) { return w.id === o.wallId; });
+      if (!wall || !Number.isFinite(wall.lengthCm) || !Number.isFinite(o.widthCm) || !Number.isFinite(o.offsetCm)) return false;
+      return o.offsetCm + o.widthCm > wall.lengthCm + .5;
+    });
+    if (openingsOutside.length) checks.push({level:'error',text:openingsOutside.length + ' aperture non entrano nella lunghezza del muro'});
 
     var pendingT = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
     if (pendingT.length) checks.push({level:'warning',text:pendingT.length + ' possibili innesti a T da controllare'});
