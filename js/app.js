@@ -41,6 +41,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   var pendingRoomId = null;
   var selectedRoomName = '';
   var surfaceCache = null;
+  var presentationModel = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -460,15 +461,96 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     return best;
   }
 
+  function openingWorldPoint(opening, wallOverride) {
+    var wall = wallOverride || walls.find(function (w) { return w.id === opening.wallId; });
+    if (!wall) return null;
+    var t = Number.isFinite(opening.position) ? opening.position : 0.5;
+    if (Number.isFinite(opening.offsetCm) && Number.isFinite(opening.widthCm) && Number.isFinite(wall.lengthCm) && wall.lengthCm > 0) {
+      var centerCm = opening.referenceEnd === 'b'
+        ? wall.lengthCm - opening.offsetCm - opening.widthCm / 2
+        : opening.offsetCm + opening.widthCm / 2;
+      t = centerCm / wall.lengthCm;
+    }
+    t = Math.max(0, Math.min(1, t));
+    return {
+      x: wall.a.x + (wall.b.x - wall.a.x) * t,
+      y: wall.a.y + (wall.b.y - wall.a.y) * t
+    };
+  }
+
+  function nearestOpening(p) {
+    var best = null;
+    openings.forEach(function (opening) {
+      var q = openingWorldPoint(opening);
+      if (!q) return;
+      var d = dist(p, q);
+      if (d <= 34 / viewZoom && (!best || d < best.distance)) best = { opening: opening, distance: d };
+    });
+    return best;
+  }
+
+  function editWallMeasurement(wall) {
+    if (!wall) return;
+    selectedWallId = wall.id;
+    numberText = Number.isFinite(wall.lengthCm) && wall.lengthCm > 0
+      ? (wall.lengthCm / 100).toFixed(2).replace('.', ',')
+      : '';
+    openSheet('wall');
+    render();
+    vibrate(14);
+  }
+
+  function editOpening(opening) {
+    if (!opening) return;
+    currentOpeningId = opening.id;
+    numberText = Number.isFinite(opening.widthCm) ? (opening.widthCm / 100).toFixed(2).replace('.', ',') : '';
+    openSheet('opening-width');
+    render();
+    vibrate(14);
+  }
+
+  function deleteCurrentOpening() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    var label = opening.type === 'door' ? 'porta' : 'finestra';
+    if (!confirm('Eliminare questa ' + label + '?')) return;
+    checkpoint();
+    openings = openings.filter(function (o) { return o.id !== opening.id; });
+    currentOpeningId = null;
+    surfaceCache = null;
+    persistActive();
+    closeSheet();
+    updateUI();
+    render();
+    toast((label === 'porta' ? 'Porta' : 'Finestra') + ' eliminata');
+  }
+
+  function startMeasureMode() {
+    var missing = walls.filter(function (w) { return !w.lengthCm; });
+    if (missing.length) return openNextMissing(missing[0].id);
+    setMode('measure');
+  }
+
   function setMode(next, announce) {
     mode = next;
-    [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window']].forEach(function (pair) {
+    [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure']].forEach(function (pair) {
       $(pair[0]).classList.toggle('active', pair[1] === mode);
     });
-    if (announce !== false) toast(next === 'draw' ? 'Disegna col dito' : next === 'door' ? 'Tocca il muro della porta' : 'Tocca il muro della finestra');
+    if (announce !== false) {
+      var msg = next === 'draw'
+        ? 'Disegna col dito'
+        : next === 'door'
+          ? 'Tocca un muro o una porta esistente'
+          : next === 'window'
+            ? 'Tocca un muro o una finestra esistente'
+            : 'Tocca il muro da modificare';
+      toast(msg);
+    }
   }
 
   function placeOpening(p) {
+    var existing = nearestOpening(p);
+    if (existing) return editOpening(existing.opening);
     var hit = nearestWall(p);
     if (!hit) return toast('Tocca più vicino a un muro');
     checkpoint();
@@ -529,6 +611,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   function openSheet(type) {
     sheetType = type;
     $('sheetBackdrop').classList.remove('hidden');
+    $('deleteOpeningBtn').classList.toggle('hidden', type === 'wall');
     if (type === 'wall') {
       var idx = walls.findIndex(function (w) { return w.id === selectedWallId; });
       $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
@@ -553,6 +636,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     sheetType = null;
     $('sheetBackdrop').classList.add('hidden');
     $('cornerToggleBtn').classList.add('hidden');
+    $('deleteOpeningBtn').classList.add('hidden');
     numberText = '';
     updateSheetValue();
   }
@@ -598,7 +682,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       if (op) op.widthCm = Math.round(meters * 100);
       surfaceCache = null;
       persistActive();
-      numberText = '';
+      numberText = op && Number.isFinite(op.offsetCm) ? (op.offsetCm / 100).toFixed(2).replace('.', ',') : '';
       openSheet('opening-offset');
       render();
       toast('Ora misura dall’angolo al bordo');
@@ -1177,6 +1261,163 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     });
   }
 
+  function presentationCard(label, value) {
+    return '<div class="ps-card"><div class="ps-k">' + label + '</div><div class="ps-v">' + formatM2(value) + '</div></div>';
+  }
+
+  function openPresentation() {
+    if (!walls.length) return toast('Prima disegna la pianta');
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) {
+      toast('Mancano ' + missing.length + ' misure');
+      return openNextMissing(missing[0].id);
+    }
+
+    var solved = solvedPresentationWalls();
+    var cleanWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
+    var cache = calculateSurfaces(cleanWalls, rooms, wallHeightM);
+    presentationModel = {
+      walls: cleanWalls,
+      openings: clone(openings),
+      rooms: clone(rooms),
+      surfaces: cache
+    };
+
+    var plan = currentPlan();
+    $('presentationTitle').textContent = plan && plan.name ? plan.name : 'Planimetria';
+    var state = surfaceStatus(cache.totals.status);
+    $('presentationStamp').textContent = 'Rilievo indicativo · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
+    $('presentationSummary').innerHTML =
+      presentationCard('PAVIMENTO', cache.totals.floorM2) +
+      presentationCard('SOFFITTO', cache.totals.ceilingM2) +
+      presentationCard('PARETI LORDE', cache.totals.wallsM2) +
+      presentationCard('PARETI + SOFFITTO', cache.totals.wallsCeilingM2);
+
+    var roomWrap = $('presentationRooms');
+    roomWrap.innerHTML = '';
+    cache.roomMetrics.forEach(function (m) {
+      var chip = document.createElement('div');
+      var st = surfaceStatus(m.status);
+      chip.className = 'presentation-room-chip ' + (st.cls === 'ok' ? '' : st.cls);
+      chip.textContent = m.room.name + ' · ' + formatM2(m.floorM2) + (st.cls === 'ok' ? '' : ' · ' + st.label);
+      roomWrap.appendChild(chip);
+    });
+
+    $('presentationBackdrop').classList.remove('hidden');
+    requestAnimationFrame(renderPresentation);
+  }
+
+  function closePresentation() {
+    $('presentationBackdrop').classList.add('hidden');
+    presentationModel = null;
+  }
+
+  function renderPresentation() {
+    if (!presentationModel || $('presentationBackdrop').classList.contains('hidden')) return;
+    var pc = $('presentationCanvas');
+    var rect = pc.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var ratio = Math.min(3, window.devicePixelRatio || 1);
+    pc.width = Math.round(rect.width * ratio);
+    pc.height = Math.round(rect.height * ratio);
+    var pctx = pc.getContext('2d');
+    pctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    pctx.clearRect(0, 0, rect.width, rect.height);
+    pctx.fillStyle = '#ffffff';
+    pctx.fillRect(0, 0, rect.width, rect.height);
+
+    var pwalls = presentationModel.walls.filter(function (w) { return w && w.a && w.b; });
+    var bounds = solverPointBounds(pwalls);
+    if (!bounds) return;
+    var bw = Math.max(1, bounds.maxX - bounds.minX);
+    var bh = Math.max(1, bounds.maxY - bounds.minY);
+    var scale = Math.min((rect.width - 54) / bw, (rect.height - 68) / bh);
+    var ox = (rect.width - bw * scale) / 2 - bounds.minX * scale;
+    var oy = (rect.height - bh * scale) / 2 - bounds.minY * scale;
+
+    function tp(p) { return { x: p.x * scale + ox, y: p.y * scale + oy }; }
+
+    var faces = presentationModel.surfaces.faces || [];
+    presentationModel.rooms.forEach(function (room, idx) {
+      var face = matchRoomFace(room, faces);
+      if (!face) return;
+      pctx.fillStyle = idx % 2 ? 'rgba(14,165,233,.055)' : 'rgba(37,99,235,.045)';
+      pctx.beginPath();
+      face.polygon.forEach(function (p, i) {
+        var sp = tp(p);
+        if (i === 0) pctx.moveTo(sp.x, sp.y); else pctx.lineTo(sp.x, sp.y);
+      });
+      pctx.closePath();
+      pctx.fill();
+    });
+
+    pctx.lineCap = 'round';
+    pctx.lineJoin = 'round';
+    pwalls.forEach(function (wall) {
+      var a = tp(wall.a), b = tp(wall.b);
+      pctx.strokeStyle = '#0f172a';
+      pctx.lineWidth = 6;
+      pctx.beginPath();
+      pctx.moveTo(a.x, a.y);
+      pctx.lineTo(b.x, b.y);
+      pctx.stroke();
+
+      if (Number.isFinite(wall.lengthCm)) {
+        var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        var label = (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m';
+        pctx.font = '900 10px system-ui';
+        var tw = pctx.measureText(label).width + 10;
+        pctx.fillStyle = 'rgba(255,255,255,.96)';
+        pctx.fillRect(mx - tw / 2, my - 8, tw, 16);
+        pctx.fillStyle = '#475569';
+        pctx.textAlign = 'center';
+        pctx.textBaseline = 'middle';
+        pctx.fillText(label, mx, my);
+      }
+    });
+
+    presentationModel.openings.forEach(function (opening) {
+      var wall = pwalls.find(function (w) { return w.id === opening.wallId; });
+      if (!wall) return;
+      var q = openingWorldPoint(opening, wall);
+      if (!q) return;
+      var p = tp(q);
+      pctx.fillStyle = opening.type === 'door' ? '#16a34a' : '#0891b2';
+      pctx.strokeStyle = '#ffffff';
+      pctx.lineWidth = 3;
+      pctx.beginPath();
+      pctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+      pctx.fill();
+      pctx.stroke();
+      pctx.fillStyle = '#ffffff';
+      pctx.font = '900 8px system-ui';
+      pctx.textAlign = 'center';
+      pctx.textBaseline = 'middle';
+      pctx.fillText(opening.type === 'door' ? 'P' : 'F', p.x, p.y + .5);
+    });
+
+    var metricByRoom = new Map();
+    (presentationModel.surfaces.roomMetrics || []).forEach(function (m) { metricByRoom.set(m.room.id, m); });
+    presentationModel.rooms.forEach(function (room) {
+      var face = matchRoomFace(room, faces);
+      if (!face) return;
+      var p = tp(face.centroid);
+      var metric = metricByRoom.get(room.id);
+      var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
+      var title = String(room.name || 'Ambiente').toUpperCase();
+      pctx.textAlign = 'center';
+      pctx.textBaseline = 'middle';
+      pctx.fillStyle = '#0f172a';
+      pctx.font = '1000 12px system-ui';
+      pctx.fillText(title, p.x, p.y - 7);
+      if (area) {
+        pctx.fillStyle = '#2563eb';
+        pctx.font = '900 11px system-ui';
+        pctx.fillText(area, p.x, p.y + 9);
+      }
+    });
+  }
+
   function openSettings() {
     $('serverUrl').value = settings.serverUrl || '';
     $('apiKey').value = settings.apiKey || '';
@@ -1279,6 +1520,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     $('solvePlanBtn').classList.toggle('hidden', !has);
     $('roomBtn').classList.toggle('hidden', !has);
     $('surfacesBtn').classList.toggle('hidden', !has);
+    $('presentBtn').classList.toggle('hidden', !has);
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
@@ -1431,6 +1673,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       currentStroke = [p];
       $('emptyHint').classList.add('hidden');
       render();
+    } else if (mode === 'measure') {
+      var hitWall = nearestWall(p);
+      if (!hitWall) return toast('Tocca più vicino a un muro');
+      editWallMeasurement(hitWall.wall);
     } else {
       placeOpening(p);
     }
@@ -1462,7 +1708,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
   $('windowBtn').addEventListener('click', function () { setMode('window'); });
-  $('measureBtn').addEventListener('click', function () { openNextMissing(); });
+  $('measureBtn').addEventListener('click', startMeasureMode);
   $('doneBtn').addEventListener('click', exportJson);
   $('undoBtn').addEventListener('click', undo);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
@@ -1470,12 +1716,16 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
+  $('deleteOpeningBtn').addEventListener('click', deleteCurrentOpening);
   $('zoomOutBtn').addEventListener('click', function () { setZoom(viewZoom / 1.25); });
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
   $('roomBtn').addEventListener('click', openRoomPicker);
   $('surfacesBtn').addEventListener('click', openSurfaces);
+  $('presentBtn').addEventListener('click', openPresentation);
+  $('closePresentationBtn').addEventListener('click', closePresentation);
+  $('presentationBackdrop').addEventListener('click', function (e) { if (e.target === $('presentationBackdrop')) closePresentation(); });
   $('solvePlanBtn').addEventListener('click', openSolver);
   $('closeSolverBtn').addEventListener('click', closeSolver);
   $('cancelSolverBtn').addEventListener('click', closeSolver);
@@ -1497,7 +1747,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
   $('settingsBackdrop').addEventListener('click', function (e) { if (e.target === $('settingsBackdrop')) closeSettings(); });
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', function () {
+    resize();
+    if (presentationModel) requestAnimationFrame(renderPresentation);
+  });
   document.addEventListener('visibilitychange', function () { if (document.hidden && activePlanId) persistActive(); });
 
   loadAll();
