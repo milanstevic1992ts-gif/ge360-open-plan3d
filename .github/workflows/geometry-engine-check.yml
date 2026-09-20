@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14, auto-straight-walls-v16 ]
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,51 @@ jobs:
         run: |
           cp js/app.js /tmp/ge360-app.mjs
           cp js/room-surfaces.js /tmp/room-surfaces.mjs
+          cp js/sketch-snap.js /tmp/sketch-snap.mjs
           node --check /tmp/ge360-app.mjs
           node --check /tmp/room-surfaces.mjs
+          node --check /tmp/sketch-snap.mjs
+
+      - name: Sketch straightening smoke tests
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { straightenPolyline, snapOrientation } from './js/sketch-snap.js';
+
+          assert.equal(snapOrientation(200, 22, 25), 'h');
+          assert.equal(snapOrientation(18, 220, 25), 'v');
+          assert.equal(snapOrientation(100, 80, 25), 'free');
+
+          const h = straightenPolyline([{x:0,y:0},{x:200,y:22}]);
+          assert.equal(h[0].y, h[1].y);
+
+          const v = straightenPolyline([{x:0,y:0},{x:18,y:220}]);
+          assert.equal(v[0].x, v[1].x);
+
+          const diagonal = straightenPolyline([{x:0,y:0},{x:100,y:80}]);
+          assert.equal(diagonal[1].x, 100);
+          assert.equal(diagonal[1].y, 80);
+
+          // Disegno veloce di una stanza: lati storti e due segmenti quasi
+          // collineari in alto devono diventare un rettangolo pulito.
+          const room = straightenPolyline([
+            {x:0,y:0},
+            {x:95,y:8},
+            {x:200,y:14},
+            {x:214,y:295},
+            {x:4,y:305},
+            {x:0,y:0}
+          ]);
+          assert.equal(room.length, 5);
+          assert.equal(room[0].x, room[room.length - 1].x);
+          assert.equal(room[0].y, room[room.length - 1].y);
+          assert.equal(room[0].y, room[1].y);
+          assert.equal(room[1].x, room[2].x);
+          assert.equal(room[2].y, room[3].y);
+          assert.equal(room[3].x, room[4].x);
+
+          console.log('GE360 sketch straightening smoke tests OK');
+          NODE
 
       - name: Geometry engine smoke tests
         run: |
