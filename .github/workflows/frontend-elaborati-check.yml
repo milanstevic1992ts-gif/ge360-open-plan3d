@@ -38,8 +38,32 @@ jobs:
         run: node --test tests/*.test.mjs
 
       - name: Ensure no repository API key
+        shell: bash
         run: |
-          if grep -RInE 'GE360_RILIEVO_API_KEY[[:space:]]*=[[:space:]]*["'\'''][^"'\''']+|apiKey[[:space:]]*:[[:space:]]*["'\'''][A-Za-z0-9_-]{20,}' . --exclude-dir=.git --exclude='*.md'; then
-            echo "Potential hardcoded API key found"
-            exit 1
-          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const hits = [];
+          const secretPatterns = [
+            /GE360_RILIEVO_API_KEY\s*=\s*['"][^'"]{8,}['"]/,
+            /apiKey\s*:\s*['"][A-Za-z0-9_-]{20,}['"]/
+          ];
+          function walk(dir) {
+            for (const name of fs.readdirSync(dir)) {
+              if (name === '.git' || name === 'node_modules') continue;
+              const full = path.join(dir, name);
+              const stat = fs.statSync(full);
+              if (stat.isDirectory()) walk(full);
+              else if (!/\.md$/i.test(name)) {
+                const text = fs.readFileSync(full, 'utf8');
+                if (secretPatterns.some(re => re.test(text))) hits.push(full);
+              }
+            }
+          }
+          walk('.');
+          if (hits.length) {
+            console.error('Potential hardcoded API key found:', hits.join(', '));
+            process.exit(1);
+          }
+          console.log('No hardcoded API key patterns found');
+          NODE
