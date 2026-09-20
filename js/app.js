@@ -656,6 +656,186 @@ import {
     return best;
   }
 
+  function hideObjectActionBar() {
+    selectedObject = null;
+    $('objectActionBar').classList.add('hidden');
+    $('objectSwingBtn').classList.add('hidden');
+  }
+
+  function showObjectActionBar(type, object, hitT) {
+    if (!object) return;
+    selectedObject = { type:type, id:object.id, t:Number.isFinite(hitT) ? hitT : .5 };
+    if (type === 'wall') {
+      selectedWallId = object.id;
+      var wi = walls.findIndex(function (w) { return w.id === object.id; });
+      $('objectActionLabel').textContent = 'MURO ' + wallReference(wi) +
+        (Number.isFinite(object.lengthCm) ? ' · ' + (object.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '');
+      $('objectMeasureBtn').textContent = '📏 MISURA';
+      $('objectSwingBtn').classList.add('hidden');
+    } else {
+      currentOpeningId = object.id;
+      $('objectActionLabel').textContent = (object.type === 'door' ? 'PORTA' : 'FINESTRA') +
+        (Number.isFinite(object.widthCm) ? ' · ' + (object.widthCm / 100).toFixed(2).replace('.', ',') + ' m' : '');
+      $('objectMeasureBtn').textContent = '📏 LARGHEZZA';
+      $('objectSwingBtn').classList.toggle('hidden', object.type !== 'door');
+    }
+    $('objectActionBar').classList.remove('hidden');
+    render();
+  }
+
+  function selectedObjectData() {
+    if (!selectedObject) return null;
+    if (selectedObject.type === 'wall') return walls.find(function (w) { return w.id === selectedObject.id; }) || null;
+    return openings.find(function (o) { return o.id === selectedObject.id; }) || null;
+  }
+
+  function measureSelectedObject() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var type = selectedObject.type;
+    hideObjectActionBar();
+    if (type === 'wall') editWallMeasurement(obj);
+    else editOpening(obj);
+  }
+
+  function moveSelectedObject() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var selection = selectedObject;
+    hideObjectActionBar();
+    if (selection.type === 'wall') {
+      selectedWallId = obj.id;
+      startWallEndpointMove(selection.t <= .5 ? 'a' : 'b');
+      return;
+    }
+    openingMoveMode = { openingId:obj.id };
+    currentOpeningId = obj.id;
+    toast('Tocca la nuova posizione sullo stesso muro');
+    vibrate(14);
+  }
+
+  function directInterventionSelected() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var selection = selectedObject;
+    hideObjectActionBar();
+
+    if (selection.type === 'wall') {
+      var wi = walls.findIndex(function (w) { return w.id === obj.id; });
+      var room = roomForWall(obj.id);
+      openNoteEditor({
+        type:'wall',
+        id:obj.id,
+        label:'Muro ' + wallReference(wi) + (room ? ' · ' + room.name : ''),
+        roomName:room ? room.name : null,
+        context:{
+          lengthM:Number.isFinite(obj.lengthCm) ? obj.lengthCm / 100 : null,
+          wallHeightM:wallHeightM,
+          grossAreaM2:Number.isFinite(obj.lengthCm) ? Number(((obj.lengthCm / 100) * wallHeightM).toFixed(2)) : null
+        }
+      });
+      return;
+    }
+
+    var oroom = roomForWall(obj.wallId);
+    openNoteEditor({
+      type:'opening',
+      id:obj.id,
+      label:(obj.type === 'door' ? 'Porta' : 'Finestra') + (oroom ? ' · ' + oroom.name : ''),
+      roomName:oroom ? oroom.name : null,
+      context:{
+        openingType:obj.type,
+        widthM:Number.isFinite(obj.widthCm) ? obj.widthCm / 100 : null,
+        offsetM:Number.isFinite(obj.offsetCm) ? obj.offsetCm / 100 : null,
+        referenceEnd:obj.referenceEnd || null
+      }
+    });
+  }
+
+  function deleteSelectedObject() {
+    var obj = selectedObjectData();
+    if (!obj) return hideObjectActionBar();
+    var type = selectedObject.type;
+    hideObjectActionBar();
+    if (type === 'wall') {
+      selectedWallId = obj.id;
+      deleteSelectedWall();
+    } else {
+      currentOpeningId = obj.id;
+      deleteCurrentOpening();
+    }
+  }
+
+  function swingSelectedDoor() {
+    var obj = selectedObjectData();
+    if (!obj || selectedObject.type !== 'opening' || obj.type !== 'door') return;
+    currentOpeningId = obj.id;
+    toggleDoorSwing();
+    showObjectActionBar('opening', obj, obj.position);
+  }
+
+  function commitOpeningMove(p) {
+    if (!openingMoveMode) return false;
+    var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    if (!opening) {
+      openingMoveMode = null;
+      return false;
+    }
+    var wall = walls.find(function (w) { return w.id === opening.wallId; });
+    if (!wall) {
+      openingMoveMode = null;
+      return false;
+    }
+    var hit = distToSegment(p, wall.a, wall.b);
+    if (hit.distance > 55 / viewZoom) {
+      toast('Tocca sul muro della ' + (opening.type === 'door' ? 'porta' : 'finestra'));
+      return true;
+    }
+
+    checkpoint();
+    opening.position = Math.max(.01, Math.min(.99, hit.t));
+    syncOpeningMetricFromPosition(opening, wall);
+    openingMoveMode = null;
+    currentOpeningId = opening.id;
+    surfaceCache = null;
+    persistActive();
+    updateUI();
+    render();
+    vibrate(20);
+    toast((opening.type === 'door' ? 'Porta' : 'Finestra') + ' spostata ✓');
+    return true;
+  }
+
+  function armLongPress(pointerId, p) {
+    if (mode !== 'draw') return;
+    var oh = nearestOpening(p);
+    var wh = nearestWall(p);
+    var target = null;
+    if (oh && oh.distance <= 28 / viewZoom) target = { type:'opening', object:oh.opening, t:oh.opening.position };
+    else if (wh && wh.distance <= 28 / viewZoom) target = { type:'wall', object:wh.wall, t:wh.t };
+    if (!target) return;
+
+    cancelLongPress();
+    longPressState = {
+      pointerId:pointerId,
+      start:{ x:p.x, y:p.y },
+      handled:false,
+      timer:setTimeout(function () {
+        if (!longPressState || longPressState.pointerId !== pointerId) return;
+        longPressState.handled = true;
+        currentStroke = null;
+        activePointerId = null;
+        showObjectActionBar(target.type, target.object, target.t);
+        vibrate(35);
+      }, 430)
+    };
+  }
+
+  function cancelLongPress() {
+    if (longPressState && longPressState.timer) clearTimeout(longPressState.timer);
+    longPressState = null;
+  }
+
   function editWallMeasurement(wall) {
     if (!wall) return;
     selectedWallId = wall.id;
@@ -3016,6 +3196,10 @@ import {
     if (e.isPrimary === false) return;
     e.preventDefault();
     var p = point(e);
+    if (openingMoveMode) {
+      commitOpeningMove(p);
+      return;
+    }
     if (wallMoveMode) {
       commitWallEndpointMove(p);
       return;
@@ -3029,6 +3213,7 @@ import {
       return;
     }
     if (mode === 'draw') {
+      armLongPress(e.pointerId, p);
       activePointerId = e.pointerId;
       if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
       currentStroke = [p];
@@ -3048,6 +3233,10 @@ import {
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
+    if (longPressState && longPressState.pointerId === e.pointerId &&
+        dist(longPressState.start, p) * viewZoom > 10) {
+      cancelLongPress();
+    }
     var last = currentStroke[currentStroke.length - 1];
     if (dist(last, p) >= 3 / viewZoom) currentStroke.push(p);
     render();
@@ -3055,6 +3244,9 @@ import {
 
   canvas.addEventListener('pointerup', function (e) {
     if (e.isPrimary === false) return;
+    var longHandled = !!(longPressState && longPressState.pointerId === e.pointerId && longPressState.handled);
+    cancelLongPress();
+    if (longHandled) return;
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
@@ -3063,6 +3255,7 @@ import {
   });
 
   canvas.addEventListener('pointercancel', function (e) {
+    cancelLongPress();
     if (e.pointerId !== activePointerId) return;
     currentStroke = null;
     activePointerId = null;
@@ -3082,6 +3275,12 @@ import {
   $('measureBtn').addEventListener('click', startMeasureMode);
   $('doneBtn').addEventListener('click', exportJson);
   $('undoBtn').addEventListener('click', undo);
+  $('redoBtn').addEventListener('click', redo);
+  $('objectMeasureBtn').addEventListener('click', measureSelectedObject);
+  $('objectMoveBtn').addEventListener('click', moveSelectedObject);
+  $('objectWorkBtn').addEventListener('click', directInterventionSelected);
+  $('objectSwingBtn').addEventListener('click', swingSelectedDoor);
+  $('objectDeleteBtn').addEventListener('click', deleteSelectedObject);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
   $('toolsBtn').addEventListener('click', openTools);
   $('closeToolsBtn').addEventListener('click', closeTools);
