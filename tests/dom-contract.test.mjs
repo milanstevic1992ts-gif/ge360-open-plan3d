@@ -90,3 +90,44 @@ test('modifica muri espone spostamento estremi ed eliminazione sicura',()=>{
   assert.match(app,/rawStrokes = rawStrokes\.filter/);
   assert.match(app,/candidate\[end\] = \{ x: p\.x, y: p\.y \}/);
 });
+
+
+test('editor avanzato espone redo e selezione diretta elementi',()=>{
+  assert.match(html,/id="redoBtn"/);
+  assert.match(html,/id="objectActionBar"/);
+  assert.match(html,/id="objectMeasureBtn"/);
+  assert.match(html,/id="objectMoveBtn"/);
+  assert.match(html,/id="objectWorkBtn"/);
+  assert.match(html,/id="objectDeleteBtn"/);
+  assert.match(app,/function redo\(/);
+  assert.match(app,/function armLongPress\(/);
+  assert.match(app,/function showObjectActionBar\(/);
+  assert.match(app,/function commitOpeningMove\(/);
+});
+
+test('vista interventi è separata dal rilievo e supporta annotazioni trascinabili',()=>{
+  assert.match(html,/id="stageModeToggle"/);
+  assert.match(html,/id="surveyViewBtn"/);
+  assert.match(html,/id="worksViewBtn"/);
+  assert.match(app,/function setEditorLayer\(/);
+  assert.match(app,/function drawInterventionSurfaces\(/);
+  assert.match(app,/function chooseAnnotationPosition\(/);
+  assert.match(app,/function startAnnotationDrag\(/);
+  assert.match(app,/labelOffset/);
+});
+
+test('misura muro attiva proporzione live e riparazione T',()=>{
+  assert.match(app,/function applyLiveProportion\(/);
+  assert.match(app,/applyMeasuredWallProportion\(/);
+  assert.match(app,/function autoRepairTJunctions\(/);
+  assert.match(app,/splitWallAtTJunction\(/);
+  assert.match(app,/applyLiveProportion\(wall\.id\)/);
+});
+
+test('FATTO esegue un controllo completo prima di esportare',()=>{
+  assert.match(html,/id="finishCheckBackdrop"/);
+  assert.match(html,/id="finishCheckList"/);
+  assert.match(app,/function buildSurveyChecks\(/);
+  assert.match(app,/function openFinishCheck\(/);
+  assert.match(app,/doneBtn'\)\.addEventListener\('click', openFinishCheck\)/);
+});
