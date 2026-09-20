@@ -40,3 +40,19 @@ test('menu mantiene SISTEMA PIANTA e aggiunge ELABORA RILIEVO',()=>{
   assert.match(html,/SISTEMA PIANTA/);
   assert.match(html,/ELABORA RILIEVO/);
 });
+
+
+test('AMBIENTE non apre PRESENTA e chiude eventuali overlay di presentazione',()=>{
+  assert.match(app,/function openRoomPicker\(\)[\s\S]*closePresentation\(\);[\s\S]*roomPickMode = true/);
+  assert.match(app,/roomBtn'\)\.addEventListener\('click',[\s\S]*runTool\(openRoomPicker\)/);
+  assert.doesNotMatch(app,/roomBtn'\)\.addEventListener\('click',[^\n]*openPresentation/);
+});
+
+test('PRESENTA conserva la geometria visiva originale del rilievo',()=>{
+  assert.match(app,/presentationModel = \{[\s\S]*walls: clone\(walls\),[\s\S]*calculationWalls: calculationWalls/);
+  assert.match(app,/var displayFaces = buildFaces\(pwalls\)/);
+});
+
+test('PRESENTA non può aprirsi durante selezione AMBIENTE',()=>{
+  assert.match(app,/function openPresentation\(\) \{[\s\S]*if \(roomPickMode\) return toast\('Prima termina la selezione AMBIENTE'\)/);
+});
