@@ -122,6 +122,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 
   function showDashboard() {
     closeSheet();
+    closeTools();
     closeNoteEditor();
     closeNoteTargetChooser();
     $('editor').classList.add('hidden');
@@ -1883,6 +1884,21 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
+  function openTools() {
+    if (!walls.length) return toast('Prima disegna la pianta');
+    cancelPickModes();
+    $('toolsBackdrop').classList.remove('hidden');
+  }
+
+  function closeTools() {
+    $('toolsBackdrop').classList.add('hidden');
+  }
+
+  function runTool(action) {
+    closeTools();
+    action();
+  }
+
   function clearAll() {
     if (!confirm('Cancellare tutto il disegno di questo rilievo?')) return;
     checkpoint();
@@ -1904,13 +1920,15 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     var has = walls.length > 0;
     $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
     $('statusPill').classList.toggle('hidden', !has);
+    $('toolsBtn').classList.toggle('hidden', !has);
     $('clearBtn').classList.toggle('hidden', !has);
     $('solvePlanBtn').classList.toggle('hidden', !has);
     $('roomBtn').classList.toggle('hidden', !has);
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
     $('notesBtn').classList.toggle('hidden', !has);
-    $('notesBtn').textContent = '📝 APPUNTI' + (notes.length ? ' ' + notes.length : '');
+    var notesTitle = $('notesBtn').querySelector('b');
+    if (notesTitle) notesTitle.textContent = 'APPUNTI' + (notes.length ? ' · ' + notes.length : '');
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
@@ -2167,7 +2185,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   $('doneBtn').addEventListener('click', exportJson);
   $('undoBtn').addEventListener('click', undo);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
-  $('clearBtn').addEventListener('click', clearAll);
+  $('toolsBtn').addEventListener('click', openTools);
+  $('closeToolsBtn').addEventListener('click', closeTools);
+  $('toolsBackdrop').addEventListener('click', function (e) { if (e.target === $('toolsBackdrop')) closeTools(); });
+  $('clearBtn').addEventListener('click', function () { runTool(clearAll); });
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
@@ -2176,13 +2197,13 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
-  $('notesBtn').addEventListener('click', openNoteTargetChooser);
-  $('roomBtn').addEventListener('click', openRoomPicker);
-  $('surfacesBtn').addEventListener('click', openSurfaces);
-  $('presentBtn').addEventListener('click', openPresentation);
+  $('notesBtn').addEventListener('click', function () { runTool(openNoteTargetChooser); });
+  $('roomBtn').addEventListener('click', function () { runTool(openRoomPicker); });
+  $('surfacesBtn').addEventListener('click', function () { runTool(openSurfaces); });
+  $('presentBtn').addEventListener('click', function () { runTool(openPresentation); });
   $('closePresentationBtn').addEventListener('click', closePresentation);
   $('presentationBackdrop').addEventListener('click', function (e) { if (e.target === $('presentationBackdrop')) closePresentation(); });
-  $('solvePlanBtn').addEventListener('click', openSolver);
+  $('solvePlanBtn').addEventListener('click', function () { runTool(openSolver); });
   $('closeSolverBtn').addEventListener('click', closeSolver);
   $('cancelSolverBtn').addEventListener('click', closeSolver);
   $('applySolverBtn').addEventListener('click', applySolverResult);
