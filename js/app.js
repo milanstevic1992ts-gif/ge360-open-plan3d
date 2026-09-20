@@ -609,8 +609,6 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 
   function handleNotePick(p) {
     var type = notePickMode;
-    notePickMode = null;
-    $('notesBtn').classList.remove('active');
     if (!type) return false;
 
     var target = null;
@@ -664,6 +662,8 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       target = buildRoomTarget(type, face);
     }
 
+    notePickMode = null;
+    $('notesBtn').classList.remove('active');
     openNoteEditor(target);
     return true;
   }
@@ -1956,6 +1956,55 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     }
   }
 
+  function noteAnchor(note) {
+    if (!note) return null;
+
+    if (note.targetType === 'wall') {
+      var wall = walls.find(function (w) { return w.id === note.targetId; });
+      if (!wall) return null;
+      return { x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 };
+    }
+
+    if (note.targetType === 'opening') {
+      var opening = openings.find(function (o) { return o.id === note.targetId; });
+      return opening ? openingWorldPoint(opening) : null;
+    }
+
+    var faces = buildFaces(walls);
+    var room = rooms.find(function (r) { return r.id === note.targetId; });
+    var face = room
+      ? matchRoomFace(room, faces)
+      : faces.find(function (f) { return faceKey(f) === note.targetId; });
+    return face ? face.centroid : null;
+  }
+
+  function drawNoteMarkers() {
+    notes.forEach(function (note) {
+      var anchor = noteAnchor(note);
+      if (!anchor) return;
+      var p = worldToScreen(anchor);
+      var oy = note.targetType === 'floor' ? 24 : note.targetType === 'ceiling' ? -24 : 0;
+      var ox = note.targetType === 'room' ? 26 : note.targetType === 'wall' ? 18 : 0;
+      p.x += ox;
+      p.y += oy;
+
+      ctx.save();
+      ctx.fillStyle = '#f59e0b';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '1000 8px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('N', p.x, p.y + .5);
+      ctx.restore();
+    });
+  }
+
   function render() {
     if ($('editor').classList.contains('hidden')) return;
     var w = canvas.clientWidth, h = canvas.clientHeight;
@@ -1982,6 +2031,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     walls.forEach(drawMeasure);
     openings.forEach(drawOpening);
     drawRoomLabels();
+    drawNoteMarkers();
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
   }
 
