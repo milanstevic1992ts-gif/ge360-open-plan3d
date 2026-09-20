@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10 ]
   workflow_dispatch:
 
 permissions:
@@ -140,7 +140,12 @@ jobs:
 
           html = Path("index.html").read_text(encoding="utf-8")
           js = Path("js/app.js").read_text(encoding="utf-8")
-          ids = set(re.findall(r'id=["\']([^"\']+)["\']', html))
+          id_list = re.findall(r'id=["\']([^"\']+)["\']', html)
+          ids = set(id_list)
+          duplicates = sorted({x for x in id_list if id_list.count(x) > 1})
+          if duplicates:
+              raise SystemExit("Duplicate DOM ids in index.html: " + ", ".join(duplicates))
+
           refs = set(re.findall(r"\$\(['\"]([^'\"]+)['\"]\)", js))
           missing = sorted(refs - ids)
           if missing:
@@ -165,6 +170,15 @@ jobs:
           grep -q "rooms: list" backend/app.py
           grep -q "wallHeightM: float" backend/app.py
           grep -q "surfaces: dict" backend/app.py
+
+      - name: Check frontend mobile interaction guards
+        run: |
+          grep -q "function cancelPickModes" js/app.js
+          grep -q "pointercancel" js/app.js
+          grep -q "e.isPrimary === false" js/app.js
+          grep -q "notes = notes.filter" js/app.js
+          grep -q "z-index:400" css/app.css
+          grep -q "z-index:8" css/app.css
 
       - name: Check construction notes and Debian LLM integration
         run: |
