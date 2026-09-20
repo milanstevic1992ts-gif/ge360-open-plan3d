@@ -82,3 +82,17 @@ test('resolve non duplica /api/v1 sugli URL elaborati restituiti dal backend', (
   assert.equal(client.resolve('/api/v1/plans/p1/pdf'),'https://ge360.local/api/v1/plans/p1/pdf');
   assert.equal(client.resolve('/plans/p1'),'https://ge360.local/api/v1/plans/p1');
 });
+
+
+test('adapter file espone URL e download senza inventare endpoint', async () => {
+  let requested='';
+  const client=new BackendClient({
+    baseUrl:'https://ge360.local/api/v1',
+    apiKey:'k',
+    fetchImpl:async (url)=>{requested=url;return response('zipdata',200,'application/zip');}
+  });
+  assert.equal(client.getFileUrl('/api/v1/files/result.pdf'),'https://ge360.local/api/v1/files/result.pdf');
+  const blob=await client.downloadAll('/api/v1/files/all.zip');
+  assert.equal(requested,'https://ge360.local/api/v1/files/all.zip');
+  assert.equal(await blob.text(),'zipdata');
+});
