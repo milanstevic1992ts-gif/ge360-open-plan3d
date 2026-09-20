@@ -3673,10 +3673,8 @@ import {
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
   $('notesBtn').addEventListener('click', function () {
-    runTool(function () {
-      setEditorLayer('works', false);
-      openNoteTargetChooser();
-    });
+    setEditorLayer('works', false);
+    runTool(openNoteTargetChooser);
   });
   $('surveyViewBtn').addEventListener('click', function () { setEditorLayer('survey'); });
   $('worksViewBtn').addEventListener('click', function () { setEditorLayer('works'); });
