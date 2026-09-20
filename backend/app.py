@@ -46,6 +46,7 @@ class PlanPayload(BaseModel):
     walls: list = Field(default_factory=list)
     openings: list = Field(default_factory=list)
     rooms: list = Field(default_factory=list)
+    notes: list = Field(default_factory=list)
     wallHeightM: float = 2.70
     surfaces: dict | None = None
     summary: dict = Field(default_factory=dict)
