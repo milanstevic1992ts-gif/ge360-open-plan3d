@@ -3,6 +3,8 @@ name: Geometry Engine Check
 on:
   push:
     branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14, auto-straight-walls-v16, corner-magnet-v18, frontend-backend-elaborati-v1 ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
