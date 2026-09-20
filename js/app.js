@@ -181,6 +181,14 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     plan.editorLayer = editorLayer;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
+    plan.takeoff = buildProgressiveTakeoff({
+      notes:notes,
+      walls:walls,
+      openings:openings,
+      rooms:rooms,
+      surfaceCache:surfaceCache,
+      wallHeightM:wallHeightM
+    });
     plan.summary = summary();
     ensureBackendMetadata(plan);
     refreshSourceRevision(plan);
@@ -1593,6 +1601,19 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     toast('Apertura porta invertita');
   }
 
+  function orphanPhotosForTarget(type, id, label) {
+    photoRefs.forEach(function (photo) {
+      if (photo.targetType !== type || String(photo.targetId) !== String(id)) return;
+      photo.orphaned = true;
+      photo.originalTargetType = type;
+      photo.originalTargetId = id;
+      photo.targetType = 'plan';
+      photo.targetId = activePlanId || '';
+      photo.targetLabel = 'SCOLLEGATA · ' + String(label || photo.targetLabel || 'Elemento eliminato');
+      photo.roomName = null;
+    });
+  }
+
   function deleteSelectedWall() {
     var wall = walls.find(function (w) { return w.id === selectedWallId; });
     if (!wall) return;
@@ -1608,6 +1629,10 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     checkpoint();
 
     var openingIds = new Set(linkedOpenings.map(function (o) { return o.id; }));
+    orphanPhotosForTarget('wall', wall.id, label);
+    linkedOpenings.forEach(function (opening) {
+      orphanPhotosForTarget('opening', opening.id, opening.type === 'door' ? 'Porta eliminata' : 'Finestra eliminata');
+    });
     openings = openings.filter(function (o) { return o.wallId !== wall.id; });
 
     notes = notes.filter(function (n) {
