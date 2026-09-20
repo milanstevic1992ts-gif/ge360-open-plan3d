@@ -13,6 +13,15 @@ import {
 } from './processed-plan.js';
 import { BackendClient } from './backend-client.js';
 import { ProcessedPlanUI } from './processed-viewer.js';
+import {
+  presetsForTarget,
+  normalizeWorkItems,
+  workItemsLabel,
+  noteDisplayStyle,
+  migrateIntervention,
+  openingInterval,
+  mergeOpeningIntervals
+} from './site-annotations.js';
 
 (function () {
   'use strict';
@@ -59,6 +68,8 @@ import { ProcessedPlanUI } from './processed-viewer.js';
   var notePickMode = null;
   var pendingNoteTarget = null;
   var currentNoteId = null;
+  var selectedNoteWorks = [];
+  var selectedNoteStyle = 'callout';
   var processedUI = null;
   var processingRunId = 0;
   var PROCESS_POLL_MS = 2000;
@@ -101,6 +112,12 @@ import { ProcessedPlanUI } from './processed-viewer.js';
       var hadBackend = !!(plan && plan.backend);
       var hadRevision = !!(plan && plan.sourceRevision);
       ensureBackendMetadata(plan);
+      if (!Array.isArray(plan.notes)) plan.notes = [];
+      plan.notes.forEach(function (note) {
+        var before = JSON.stringify(note);
+        migrateIntervention(note);
+        if (JSON.stringify(note) !== before) migrated = true;
+      });
       if (!hadBackend || !hadRevision) migrated = true;
     });
     if (migrated) saveLibrary();
@@ -198,7 +215,7 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     walls = clone(plan.walls || []);
     openings = clone(plan.openings || []);
     rooms = clone(plan.rooms || []);
-    notes = clone(plan.notes || []);
+    notes = clone(plan.notes || []).map(function (note) { return migrateIntervention(note); });
     notePickMode = null;
     pendingNoteTarget = null;
     currentNoteId = null;
@@ -786,17 +803,54 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     });
   }
 
+  function renderNoteWorkControls(type) {
+    var wrap = $('noteWorkPresets');
+    wrap.innerHTML = '';
+    presetsForTarget(type).forEach(function (item) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.workCode = item.code;
+      btn.dataset.workCategory = item.category;
+      btn.textContent = item.label;
+      btn.classList.toggle('selected', selectedNoteWorks.some(function (x) { return x.code === item.code; }));
+      btn.addEventListener('click', function () {
+        var exists = selectedNoteWorks.some(function (x) { return x.code === item.code; });
+        selectedNoteWorks = exists
+          ? selectedNoteWorks.filter(function (x) { return x.code !== item.code; })
+          : normalizeWorkItems(selectedNoteWorks.concat([item]));
+        renderNoteWorkControls(type);
+      });
+      wrap.appendChild(btn);
+    });
+
+    document.querySelectorAll('[data-note-style]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.noteStyle === selectedNoteStyle);
+    });
+  }
+
+  function setNoteDisplayStyle(style) {
+    selectedNoteStyle = noteDisplayStyle(style);
+    document.querySelectorAll('[data-note-style]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.noteStyle === selectedNoteStyle);
+    });
+  }
+
   function openNoteEditor(target) {
     pendingNoteTarget = target;
     var existing = existingNoteForTarget(target);
     currentNoteId = existing ? existing.id : null;
     $('noteTargetTitle').textContent = target.label;
     $('noteTargetMeta').textContent = target.roomName ? 'Ambiente: ' + target.roomName : '';
+    selectedNoteWorks = existing ? normalizeWorkItems(existing.workItems) : [];
+    selectedNoteStyle = noteDisplayStyle(existing && existing.displayStyle);
     $('noteRawText').value = existing ? existing.rawText || '' : '';
     $('deleteNoteBtn').classList.toggle('hidden', !existing);
+    renderNoteWorkControls(target.type);
     renderNoteAi(existing);
     $('noteEditorBackdrop').classList.remove('hidden');
-    requestAnimationFrame(function () { $('noteRawText').focus(); });
+    requestAnimationFrame(function () {
+      if (!selectedNoteWorks.length) $('noteRawText').focus();
+    });
   }
 
   function closeNoteEditor(saveDraft) {
@@ -807,15 +861,19 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     $('noteEditorBackdrop').classList.add('hidden');
     pendingNoteTarget = null;
     currentNoteId = null;
+    selectedNoteWorks = [];
+    selectedNoteStyle = 'callout';
   }
 
   function saveCurrentNote(silent) {
     if (!pendingNoteTarget) return null;
     var raw = $('noteRawText').value.trim();
-    if (!raw) {
-      if (!silent) toast('Scrivi prima un appunto');
+    var workItems = normalizeWorkItems(selectedNoteWorks);
+    if (!raw && !workItems.length) {
+      if (!silent) toast('Scegli una lavorazione o scrivi una nota');
       return null;
     }
+    if (!raw) raw = workItemsLabel(workItems);
 
     var existing = currentNoteId ? notes.find(function (n) { return n.id === currentNoteId; }) : existingNoteForTarget(pendingNoteTarget);
     if (!existing) {
@@ -828,6 +886,9 @@ import { ProcessedPlanUI } from './processed-viewer.js';
         targetLabel: pendingNoteTarget.label,
         roomName: pendingNoteTarget.roomName || null,
         context: clone(pendingNoteTarget.context || {}),
+        kind: 'intervention',
+        workItems: workItems,
+        displayStyle: selectedNoteStyle,
         rawText: raw,
         cleanedText: '',
         tasks: [],
@@ -839,13 +900,17 @@ import { ProcessedPlanUI } from './processed-viewer.js';
       currentNoteId = existing.id;
     } else {
       checkpoint();
-      if (existing.rawText !== raw) {
+      var workChanged = JSON.stringify(normalizeWorkItems(existing.workItems)) !== JSON.stringify(workItems);
+      if (existing.rawText !== raw || workChanged) {
         existing.cleanedText = '';
         existing.tasks = [];
         existing.needsClarification = [];
         existing.model = null;
         existing.rewrittenAt = null;
       }
+      existing.kind = 'intervention';
+      existing.workItems = workItems;
+      existing.displayStyle = selectedNoteStyle;
       existing.rawText = raw;
       existing.targetLabel = pendingNoteTarget.label;
       existing.roomName = pendingNoteTarget.roomName || null;
@@ -857,13 +922,13 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     updateUI();
     $('deleteNoteBtn').classList.remove('hidden');
     renderNoteAi(existing);
-    if (!silent) toast('Appunto salvato ✓');
+    if (!silent) toast('Intervento salvato ✓');
     return existing;
   }
 
   async function rewriteCurrentNote() {
     var note = saveCurrentNote(true);
-    if (!note) return toast('Scrivi prima un appunto');
+    if (!note) return toast('Scegli una lavorazione o scrivi una nota');
     if (!settings.serverUrl || !settings.apiKey) {
       toast('Configura prima il Debian');
       openSettings();
@@ -891,6 +956,8 @@ import { ProcessedPlanUI } from './processed-viewer.js';
           targetId: note.targetId,
           targetLabel: note.targetLabel,
           roomName: note.roomName,
+          workItems: note.workItems || [],
+          displayStyle: note.displayStyle || 'callout',
           context: note.context || {}
         })
       });
@@ -913,7 +980,7 @@ import { ProcessedPlanUI } from './processed-viewer.js';
       note.updatedAt = note.rewrittenAt;
       persistActive();
       renderNoteAi(note);
-      toast('Appunto sistemato ✓');
+      toast('Nota intervento sistemata ✓');
     } catch (e) {
       toast('IA non disponibile: ' + e.message);
     } finally {
@@ -925,13 +992,13 @@ import { ProcessedPlanUI } from './processed-viewer.js';
   function deleteCurrentNote() {
     var note = currentNoteId ? notes.find(function (n) { return n.id === currentNoteId; }) : null;
     if (!note) return;
-    if (!confirm('Eliminare questo appunto?')) return;
+    if (!confirm('Eliminare questo intervento?')) return;
     checkpoint();
     notes = notes.filter(function (n) { return n.id !== note.id; });
     persistActive();
     updateUI();
     closeNoteEditor(false);
-    toast('Appunto eliminato');
+    toast('Intervento eliminato');
   }
 
   function setMode(next, announce) {
@@ -2166,7 +2233,7 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     $('presentBtn').classList.toggle('hidden', !has);
     $('notesBtn').classList.toggle('hidden', !has);
     var notesTitle = $('notesBtn').querySelector('b');
-    if (notesTitle) notesTitle.textContent = 'APPUNTI' + (notes.length ? ' · ' + notes.length : '');
+    if (notesTitle) notesTitle.textContent = 'INTERVENTI' + (notes.length ? ' · ' + notes.length : '');
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
@@ -2476,6 +2543,9 @@ import { ProcessedPlanUI } from './processed-viewer.js';
   $('saveRawNoteBtn').addEventListener('click', function () { saveCurrentNote(false); });
   $('rewriteNoteBtn').addEventListener('click', rewriteCurrentNote);
   $('deleteNoteBtn').addEventListener('click', deleteCurrentNote);
+  document.querySelectorAll('[data-note-style]').forEach(function (b) {
+    b.addEventListener('click', function () { setNoteDisplayStyle(b.dataset.noteStyle); });
+  });
   $('wallHeightInput').addEventListener('change', changeWallHeight);
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
