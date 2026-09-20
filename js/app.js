@@ -641,6 +641,37 @@ import {
     return String(type) + ':' + String(id || '');
   }
 
+  function wallReference(index) {
+    var n = Math.max(0, Number(index) || 0);
+    var out = '';
+    do {
+      out = String.fromCharCode(65 + (n % 26)) + out;
+      n = Math.floor(n / 26) - 1;
+    } while (n >= 0);
+    return out;
+  }
+
+  function interventionQuantityHint(target) {
+    if (!target || !target.context) return null;
+    var c = target.context;
+    if (target.type === 'floor' && Number.isFinite(c.areaM2)) {
+      return { value:c.areaM2, unit:'m2', basis:'floor_area' };
+    }
+    if (target.type === 'ceiling' && Number.isFinite(c.ceilingM2)) {
+      return { value:c.ceilingM2, unit:'m2', basis:'ceiling_area' };
+    }
+    if (target.type === 'wall' && Number.isFinite(c.grossAreaM2)) {
+      return { value:c.grossAreaM2, unit:'m2', basis:'gross_wall_area' };
+    }
+    if (target.type === 'opening') {
+      return { value:1, unit:'cad', basis:'opening_count' };
+    }
+    if (target.type === 'room' && Number.isFinite(c.areaM2)) {
+      return { value:c.areaM2, unit:'m2', basis:'floor_area' };
+    }
+    return null;
+  }
+
   function faceRoom(face) {
     if (!face) return null;
     var key = faceKey(face);
@@ -719,7 +750,7 @@ import {
       target = {
         type: 'wall',
         id: wall.id,
-        label: 'Muro ' + (idx + 1) + (room ? ' · ' + room.name : ''),
+        label: 'Muro ' + wallReference(idx) + (room ? ' · ' + room.name : ''),
         roomName: room ? room.name : null,
         context: {
           lengthM: Number.isFinite(wall.lengthCm) ? wall.lengthCm / 100 : null,
@@ -886,6 +917,7 @@ import {
         targetLabel: pendingNoteTarget.label,
         roomName: pendingNoteTarget.roomName || null,
         context: clone(pendingNoteTarget.context || {}),
+        quantityHint: interventionQuantityHint(pendingNoteTarget),
         kind: 'intervention',
         workItems: workItems,
         displayStyle: selectedNoteStyle,
@@ -909,6 +941,7 @@ import {
         existing.rewrittenAt = null;
       }
       existing.kind = 'intervention';
+      existing.quantityHint = interventionQuantityHint(pendingNoteTarget);
       existing.workItems = workItems;
       existing.displayStyle = selectedNoteStyle;
       existing.rawText = raw;
@@ -958,6 +991,7 @@ import {
           roomName: note.roomName,
           workItems: note.workItems || [],
           displayStyle: note.displayStyle || 'callout',
+          quantityHint: note.quantityHint || null,
           context: note.context || {}
         })
       });
@@ -1070,6 +1104,16 @@ import {
     vibrate(20);
   }
 
+  function toggleDoorSwing() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening || opening.type !== 'door') return;
+    opening.swingSide = opening.swingSide === -1 ? 1 : -1;
+    persistActive();
+    render();
+    vibrate(18);
+    toast('Apertura porta invertita');
+  }
+
   function openNextMissing(preferredId) {
     var target = preferredId ? walls.find(function (w) { return w.id === preferredId && !w.lengthCm; }) : null;
     if (!target) target = walls.find(function (w) { return !w.lengthCm; });
@@ -1084,11 +1128,13 @@ import {
     sheetType = type;
     $('sheetBackdrop').classList.remove('hidden');
     $('deleteOpeningBtn').classList.toggle('hidden', type === 'wall');
+    $('swingToggleBtn').classList.add('hidden');
     if (type === 'wall') {
       var idx = walls.findIndex(function (w) { return w.id === selectedWallId; });
       $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
     } else {
       var o = openings.find(function (x) { return x.id === currentOpeningId; });
+      $('swingToggleBtn').classList.toggle('hidden', !(o && o.type === 'door'));
       if (type === 'opening-width') {
         $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
         $('cornerToggleBtn').classList.add('hidden');
@@ -1108,6 +1154,7 @@ import {
     sheetType = null;
     $('sheetBackdrop').classList.add('hidden');
     $('cornerToggleBtn').classList.add('hidden');
+    $('swingToggleBtn').classList.add('hidden');
     $('deleteOpeningBtn').classList.add('hidden');
     numberText = '';
     updateSheetValue();
@@ -1551,7 +1598,7 @@ import {
       if (note.targetType === 'wall' && wallIds.indexOf(note.targetId) !== -1) {
         var wi = walls.findIndex(function (w) { return w.id === note.targetId; });
         note.roomName = room.name;
-        note.targetLabel = 'Muro ' + (wi + 1) + ' · ' + room.name;
+        note.targetLabel = 'Muro ' + wallReference(wi) + ' · ' + room.name;
         note.updatedAt = new Date().toISOString();
         return;
       }
@@ -2466,8 +2513,19 @@ import {
 
   function interventionText(note) {
     var items = normalizeWorkItems(note && note.workItems);
-    if (items.length) return items.map(function (x) { return x.label; }).join(' · ');
-    return String((note && (note.cleanedText || note.rawText)) || 'INTERVENTO').trim();
+    var base = items.length
+      ? items.map(function (x) { return x.label; }).join(' · ')
+      : String((note && (note.cleanedText || note.rawText)) || 'INTERVENTO').trim();
+    if (!note) return base;
+
+    var prefix = '';
+    if (note.targetType === 'wall') prefix = String(note.targetLabel || 'MURO').split('·')[0].trim();
+    else if (note.targetType === 'floor') prefix = 'PAVIMENTO';
+    else if (note.targetType === 'ceiling') prefix = 'SOFFITTO';
+    else if (note.targetType === 'opening') prefix = String(note.targetLabel || 'APERTURA').split('·')[0].trim();
+    else if (note.targetType === 'room' && note.roomName) prefix = String(note.roomName);
+
+    return prefix ? prefix.toUpperCase() + ' · ' + base : base;
   }
 
   function wrapAnnotationText(gctx, text, maxWidth, maxLines) {
@@ -2667,6 +2725,7 @@ import {
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
+  $('swingToggleBtn').addEventListener('click', toggleDoorSwing);
   $('deleteOpeningBtn').addEventListener('click', deleteCurrentOpening);
   $('zoomOutBtn').addEventListener('click', function () { setZoom(viewZoom / 1.25); });
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
