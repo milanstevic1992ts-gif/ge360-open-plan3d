@@ -125,3 +125,9 @@
 .note-style-toggle button.active{background:#eef2ff;color:#3730a3;border-color:#818cf8}
 .note-label small{font-weight:700;color:#94a3b8}
 .note-label textarea{min-height:92px}
+
+
+/* Modifica muri */
+.wall-edit-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.wall-edit-actions button{height:44px;border-radius:13px;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;font-size:10px;font-weight:1000}
+.wall-edit-actions button:active{transform:scale(.985)}
