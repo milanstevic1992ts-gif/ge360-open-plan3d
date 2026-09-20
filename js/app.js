@@ -351,6 +351,170 @@ import {
     return b;
   }
 
+  function currentSite() {
+    var plan=currentPlan();
+    if (!plan || !plan.siteId) return null;
+    return sites.find(function (site) { return String(site.id)===String(plan.siteId); }) || null;
+  }
+
+  function fillSiteStatusSelect() {
+    var select=$('siteStatusInput');
+    select.innerHTML='';
+    SITE_STATUSES.forEach(function (status) {
+      var option=document.createElement('option');
+      option.value=status.code;
+      option.textContent=status.label;
+      select.appendChild(option);
+    });
+  }
+
+  function fillExistingSiteSelect(excludeId) {
+    var select=$('siteExistingSelect');
+    select.innerHTML='';
+    var empty=document.createElement('option');
+    empty.value='';
+    empty.textContent='Scegli un cantiere…';
+    select.appendChild(empty);
+    sites
+      .filter(function (site) { return !excludeId || String(site.id)!==String(excludeId); })
+      .sort(function (a,b) { return siteLabel(a).localeCompare(siteLabel(b),'it'); })
+      .forEach(function (site) {
+        var option=document.createElement('option');
+        option.value=site.id;
+        option.textContent=siteLabel(site)+' · '+statusLabel(site.status);
+        select.appendChild(option);
+      });
+  }
+
+  function openSiteModal(siteId, attachPlanId) {
+    editingSiteId=siteId || null;
+    siteModalAttachPlanId=attachPlanId || null;
+    fillSiteStatusSelect();
+    fillExistingSiteSelect(siteId);
+
+    var site=siteId ? sites.find(function (item) { return String(item.id)===String(siteId); }) : null;
+    var attachPlan=attachPlanId ? library.find(function (plan) { return String(plan.id)===String(attachPlanId); }) : null;
+    var showExisting=!!(attachPlan && !attachPlan.siteId && sites.length);
+    $('siteExistingWrap').classList.toggle('hidden',!showExisting);
+    $('siteModalTitle').textContent=site ? 'Modifica cantiere' : (attachPlan ? 'Collega il rilievo' : 'Nuovo cantiere');
+    $('siteTitleInput').value=site ? site.title || '' : '';
+    $('siteClientInput').value=site ? site.clientName || '' : '';
+    $('siteAddressInput').value=site ? site.address || '' : '';
+    $('sitePhoneInput').value=site ? site.phone || '' : '';
+    $('siteEmailInput').value=site ? site.email || '' : '';
+    $('siteStatusInput').value=site ? site.status : 'survey';
+    $('siteNotesInput').value=site ? site.notes || '' : '';
+    $('deleteSiteBtn').classList.toggle('hidden',!site);
+    $('detachPlanSiteBtn').classList.toggle('hidden',!(attachPlan && attachPlan.siteId));
+    $('siteBackdrop').classList.remove('hidden');
+  }
+
+  function closeSiteModal() {
+    $('siteBackdrop').classList.add('hidden');
+    editingSiteId=null;
+    siteModalAttachPlanId=null;
+  }
+
+  function saveSiteFromModal() {
+    var input={
+      title:$('siteTitleInput').value.trim(),
+      clientName:$('siteClientInput').value.trim(),
+      address:$('siteAddressInput').value.trim(),
+      phone:$('sitePhoneInput').value.trim(),
+      email:$('siteEmailInput').value.trim(),
+      status:$('siteStatusInput').value,
+      notes:$('siteNotesInput').value.trim()
+    };
+    if (!input.title && !input.clientName && !input.address) return toast('Inserisci almeno cliente, indirizzo o nome cantiere');
+
+    var now=new Date().toISOString();
+    var site;
+    if (editingSiteId) {
+      var idx=sites.findIndex(function (item) { return String(item.id)===String(editingSiteId); });
+      if (idx<0) return;
+      site=normalizeSite(Object.assign({},sites[idx],input,{updatedAt:now}));
+      sites[idx]=site;
+    } else {
+      site=createSite(Object.assign({},input,{updatedAt:now}),function () { return uid('site'); });
+      sites.unshift(site);
+      editingSiteId=site.id;
+    }
+
+    if (siteModalAttachPlanId) {
+      var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
+      if (plan) {
+        plan.siteId=site.id;
+        plan.updatedAt=now;
+        scheduleAutoBackup(plan);
+      }
+    }
+
+    saveSites();
+    saveLibrary();
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Cantiere salvato ✓');
+  }
+
+  function linkExistingSite() {
+    if (!siteModalAttachPlanId) return;
+    var siteId=$('siteExistingSelect').value;
+    if (!siteId) return toast('Scegli un cantiere');
+    var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
+    var site=sites.find(function (x) { return String(x.id)===String(siteId); });
+    if (!plan || !site) return;
+    plan.siteId=site.id;
+    plan.updatedAt=new Date().toISOString();
+    site.updatedAt=plan.updatedAt;
+    saveLibrary();
+    saveSites();
+    scheduleAutoBackup(plan);
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Rilievo collegato a '+siteLabel(site)+' ✓');
+  }
+
+  function detachCurrentPlanSite() {
+    if (!siteModalAttachPlanId) return;
+    var plan=library.find(function (p) { return String(p.id)===String(siteModalAttachPlanId); });
+    if (!plan) return;
+    plan.siteId=null;
+    plan.updatedAt=new Date().toISOString();
+    saveLibrary();
+    scheduleAutoBackup(plan);
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Rilievo scollegato dal cantiere');
+  }
+
+  function deleteEditingSite() {
+    if (!editingSiteId) return;
+    var site=sites.find(function (x) { return String(x.id)===String(editingSiteId); });
+    if (!site) return;
+    var linked=library.filter(function (p) { return String(p.siteId || '')===String(site.id); });
+    var question='Eliminare il cantiere “'+siteLabel(site)+'”?';
+    if (linked.length) question+='\nI '+linked.length+' rilievi resteranno salvati ma senza cantiere.';
+    if (!confirm(question)) return;
+    linked.forEach(function (plan) { plan.siteId=null; scheduleAutoBackup(plan); });
+    sites=sites.filter(function (x) { return String(x.id)!==String(site.id); });
+    if (String(activeSiteFilter)===String(site.id)) activeSiteFilter='all';
+    saveSites();
+    saveLibrary();
+    closeSiteModal();
+    renderDashboard();
+    updateUI();
+    toast('Cantiere eliminato');
+  }
+
+  function openCurrentPlanSite() {
+    closeTools();
+    var site=currentSite();
+    openSiteModal(site ? site.id : null,activePlanId);
+  }
+
   function renderSiteArchive() {
     var grid = $('siteGrid');
     grid.innerHTML = '';
@@ -362,8 +526,7 @@ import {
       .sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); })
       .forEach(function (site) {
         var stats = siteStats(site, library);
-        var card = document.createElement('button');
-        card.type = 'button';
+        var card = document.createElement('article');
         card.className = 'site-card' + (String(activeSiteFilter) === String(site.id) ? ' active' : '');
         var head = document.createElement('div');
         head.className = 'site-card-head';
@@ -384,16 +547,24 @@ import {
         if (stats.photos) bits.push(stats.photos + ' foto');
         meta.textContent = bits.join(' · ');
 
-        card.appendChild(head);
-        card.appendChild(meta);
-        card.addEventListener('click', function () {
-          activeSiteFilter = String(activeSiteFilter) === String(site.id) ? 'all' : site.id;
+        var actions=document.createElement('div');
+        actions.className='site-card-actions';
+        var filterBtn=document.createElement('button');
+        filterBtn.type='button';
+        filterBtn.textContent=String(activeSiteFilter)===String(site.id) ? 'MOSTRA TUTTI' : 'APR I RILIEVI';
+        filterBtn.addEventListener('click',function () {
+          activeSiteFilter=String(activeSiteFilter)===String(site.id) ? 'all' : site.id;
           renderDashboard();
         });
-        card.addEventListener('dblclick', function (e) {
-          e.preventDefault();
-          openSiteModal(site.id, null);
-        });
+        var editBtn=document.createElement('button');
+        editBtn.type='button';
+        editBtn.textContent='MODIFICA';
+        editBtn.addEventListener('click',function () { openSiteModal(site.id,null); });
+        actions.appendChild(filterBtn);
+        actions.appendChild(editBtn);
+        card.appendChild(head);
+        card.appendChild(meta);
+        card.appendChild(actions);
         grid.appendChild(card);
       });
   }
