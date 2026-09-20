@@ -131,3 +131,39 @@
 .wall-edit-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .wall-edit-actions button{height:44px;border-radius:13px;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;font-size:10px;font-weight:1000}
 .wall-edit-actions button:active{transform:scale(.985)}
+
+
+/* Editor avanzato: Rilievo / Interventi, selezione diretta, controlli finali */
+.icon-btn:disabled{opacity:.32}
+.stage-mode-toggle{position:absolute;left:12px;top:58px;z-index:9;display:grid;grid-template-columns:1fr 1fr;width:190px;padding:4px;border-radius:14px;background:rgba(255,255,255,.96);border:1px solid #e2e8f0;box-shadow:0 5px 16px rgba(15,23,42,.12)}
+.stage-mode-toggle button{height:34px;border-radius:10px;background:transparent;color:#64748b;font-size:9px;font-weight:1000;letter-spacing:.05em}
+.stage-mode-toggle button.active{background:#0f172a;color:#fff}
+.stage-mode-toggle #worksViewBtn.active{background:#7c3aed}
+
+.object-action-bar{position:absolute;left:10px;right:10px;bottom:10px;z-index:25;padding:9px;border-radius:18px;background:rgba(15,23,42,.96);box-shadow:0 12px 32px rgba(15,23,42,.3)}
+.object-action-label{color:#fff;font-size:11px;font-weight:1000;padding:0 4px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.object-action-buttons{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.object-action-buttons button{min-height:40px;padding:5px;border-radius:10px;background:#fff;color:#334155;font-size:8px;font-weight:1000;line-height:1.05}
+.object-action-buttons button.danger{background:#fee2e2;color:#b91c1c}
+.object-action-buttons button:not(.hidden):nth-child(4){background:#fef3c7;color:#92400e}
+
+.finish-check-card{width:100%;max-width:520px;max-height:88dvh;overflow:auto;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.3)}
+.finish-check-summary{padding:12px;border-radius:15px;font-size:12px;font-weight:900;line-height:1.35;margin-bottom:9px}
+.finish-check-summary.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.finish-check-summary.warn{background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+.finish-check-summary.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.finish-check-list{display:grid;gap:6px}
+.finish-check-row{padding:9px 10px;border-radius:12px;font-size:11px;line-height:1.3}
+.finish-check-row.warning{background:#fffbeb;color:#92400e}
+.finish-check-row.error{background:#fef2f2;color:#991b1b}
+.finish-check-actions{display:grid;grid-template-columns:1fr 1.35fr;gap:8px;margin-top:12px}
+.finish-check-actions button{min-height:52px;border-radius:15px;font-weight:1000;font-size:11px}
+
+@media(max-width:420px){
+  .topbar{gap:5px;padding-left:7px;padding-right:7px}
+  .top-actions{gap:4px}
+  .top-actions .icon-btn{width:38px;height:42px}
+  .save-btn{padding:0 9px;font-size:11px}
+  .stage-mode-toggle{width:168px}
+  .object-action-buttons{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
