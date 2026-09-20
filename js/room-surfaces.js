@@ -88,24 +88,38 @@ export function buildFaces(walls, options = {}) {
   const degree = nodeEdges.map(list => list.length);
   const usedVirtualNode = new Set();
   const virtualCandidates = [];
+  const nodeComponent = new Int32Array(nodes.length);
+  nodeComponent.fill(-1);
+  components.forEach(comp => comp.nodes.forEach(n => { nodeComponent[n] = comp.index; }));
 
+  const componentDanglingCount = new Map();
+  const dangling = [];
   components.forEach(comp => {
-    const dangling = comp.nodes.filter(n => degree[n] === 1);
-    for (let i = 0; i < dangling.length; i++) {
-      for (let j = i + 1; j < dangling.length; j++) {
-        const a = dangling[i], b = dangling[j];
-        if (hasDirectEdge(a, b, edges, nodeEdges)) continue;
-        const gapCm = distance(nodes[a], nodes[b]) * scaleCmPerUnit;
-        if (gapCm > opts.verifyGapCm) continue;
-
-        // Se ci sono molti capi liberi siamo prudenti: chiudiamo automaticamente
-        // solo coppie ragionevolmente vicine. Se sono gli unici due capi del gruppo,
-        // accettiamo anche una stima "da verificare".
-        if (dangling.length > 2 && gapCm > opts.estimatedGapCm) continue;
-        virtualCandidates.push({ a, b, gapCm, component: comp.index });
-      }
-    }
+    const list = comp.nodes.filter(n => degree[n] === 1);
+    componentDanglingCount.set(comp.index, list.length);
+    list.forEach(n => dangling.push(n));
   });
+
+  // Piccoli errori di tap possono lasciare ogni lato come componente separato.
+  // Valutiamo quindi anche capi appartenenti a componenti diversi. Tra componenti
+  // diversi usiamo solo la soglia prudente "estimatedGapCm"; la soglia più larga
+  // "verifyGapCm" resta riservata a una singola catena quasi chiusa.
+  for (let i = 0; i < dangling.length; i++) {
+    for (let j = i + 1; j < dangling.length; j++) {
+      const a = dangling[i], b = dangling[j];
+      if (hasDirectEdge(a, b, edges, nodeEdges)) continue;
+
+      const compA = nodeComponent[a];
+      const compB = nodeComponent[b];
+      const sameComponent = compA === compB;
+      const gapCm = distance(nodes[a], nodes[b]) * scaleCmPerUnit;
+      const maxGap = sameComponent ? opts.verifyGapCm : opts.estimatedGapCm;
+      if (gapCm > maxGap) continue;
+
+      if (sameComponent && (componentDanglingCount.get(compA) || 0) > 2 && gapCm > opts.estimatedGapCm) continue;
+      virtualCandidates.push({ a, b, gapCm, componentA: compA, componentB: compB });
+    }
+  }
 
   virtualCandidates.sort((p, q) => p.gapCm - q.gapCm || p.a - q.a || p.b - q.b);
 
@@ -145,6 +159,7 @@ export function buildFaces(walls, options = {}) {
     const polygon = [];
     const wallIds = [];
     const virtualGaps = [];
+    const steps = [];
     const seen = new Set();
     let closed = false;
 
@@ -158,7 +173,16 @@ export function buildFaces(walls, options = {}) {
 
       const h = half[cur];
       const e = edges[h.edge];
-      polygon.push({ x: nodes[h.from].x, y: nodes[h.from].y });
+      const fromNode = nodes[h.from];
+      const toNode = nodes[h.to];
+      polygon.push({ x: fromNode.x, y: fromNode.y });
+      steps.push({
+        wallId: e.wallId,
+        virtual: !!e.virtual,
+        gapCm: e.gapCm || 0,
+        dx: toNode.x - fromNode.x,
+        dy: toNode.y - fromNode.y
+      });
       if (e.virtual) virtualGaps.push(e.gapCm);
       else if (e.wallId != null) wallIds.push(e.wallId);
 
@@ -196,7 +220,8 @@ export function buildFaces(walls, options = {}) {
       maxGapCm,
       virtualGapCount: virtualGaps.length,
       virtualGapsCm: virtualGaps.map(v => round(v, 1)),
-      scaleCmPerUnit
+      scaleCmPerUnit,
+      steps
     });
   }
 
@@ -246,8 +271,10 @@ export function calculateSurfaces(solvedWalls, rooms, heightM, options = {}) {
   const h = Number.isFinite(heightM) && heightM > 0 ? heightM : 2.7;
   const faceMetrics = faces.map(face => {
     const perimeterCm = face.wallIds.reduce((sum, id) => sum + (wallLength.get(String(id)) || 0), 0);
+    const metricAreaCm2 = metricFaceAreaCm2(face, wallLength);
     const scale2 = face.scaleCmPerUnit * face.scaleCmPerUnit;
-    const floorM2 = Math.abs(face.area) * scale2 / 10000;
+    const fallbackAreaCm2 = Math.abs(face.area) * scale2;
+    const floorM2 = (Number.isFinite(metricAreaCm2) ? metricAreaCm2 : fallbackAreaCm2) / 10000;
     const perimeterM = perimeterCm / 100;
     const wallsM2 = perimeterM * h;
 
@@ -313,6 +340,31 @@ export function calculateSurfaces(solvedWalls, rooms, heightM, options = {}) {
       verifyGapCm: normalizeOptions(options).verifyGapCm
     }
   };
+}
+
+function metricFaceAreaCm2(face, wallLength) {
+  if (!face || !Array.isArray(face.steps) || !face.steps.length) return NaN;
+
+  const points = [{ x: 0, y: 0 }];
+  let cur = { x: 0, y: 0 };
+  let actualEdges = 0;
+
+  for (const step of face.steps) {
+    if (!step || step.virtual) continue;
+    const L = wallLength.get(String(step.wallId));
+    const d = Math.hypot(step.dx, step.dy);
+    if (!Number.isFinite(L) || L <= 0 || !Number.isFinite(d) || d <= 1e-9) return NaN;
+
+    cur = {
+      x: cur.x + step.dx / d * L,
+      y: cur.y + step.dy / d * L
+    };
+    points.push(cur);
+    actualEdges++;
+  }
+
+  if (actualEdges < 3 || points.length < 4) return NaN;
+  return Math.abs(signedArea(points));
 }
 
 export function pointInPolygon(p, polygon) {
