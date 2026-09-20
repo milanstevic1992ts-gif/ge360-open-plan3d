@@ -147,8 +147,24 @@ import {
     localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
   }
 
+  function saveSites() {
+    localStorage.setItem(SITES_KEY, JSON.stringify(sites));
+  }
+
+  function scheduleAutoBackup(plan) {
+    if (!plan || !plan.id) return;
+    clearTimeout(backupTimer);
+    backupTimer = setTimeout(async function () {
+      if (backupInFlight) return;
+      backupInFlight = true;
+      try { await createPlanBackup(plan, 'auto'); } catch (_) {}
+      backupInFlight = false;
+    }, 1200);
+  }
+
   function loadAll() {
     library = parse(localStorage.getItem(LIBRARY_KEY), []);
+    sites = parse(localStorage.getItem(SITES_KEY), []).map(function (site) { return normalizeSite(site); });
     settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
     var migrated = false;
     library.forEach(function (plan) {
@@ -164,6 +180,7 @@ import {
       if (!hadBackend || !hadRevision) migrated = true;
     });
     if (migrated) saveLibrary();
+    saveSites();
     renderDashboard();
     updateServerBadge();
   }
@@ -216,6 +233,7 @@ import {
     ensureBackendMetadata(plan);
     refreshSourceRevision(plan);
     saveLibrary();
+    scheduleAutoBackup(plan);
     if (processedUI) processedUI.render(plan);
     if (showToast) toast('Salvato ✓');
   }
@@ -252,6 +270,7 @@ import {
       rooms: [],
       notes: [],
       photos: [],
+      siteId: activeSiteFilter !== 'all' && activeSiteFilter !== 'none' ? activeSiteFilter : null,
       wallHeightM: 2.70,
       liveScaleCmPerUnit: null,
       editorLayer: 'survey',
