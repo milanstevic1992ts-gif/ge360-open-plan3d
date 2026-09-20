@@ -530,6 +530,9 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     if (!confirm('Eliminare questa ' + label + '?')) return;
     checkpoint();
     openings = openings.filter(function (o) { return o.id !== opening.id; });
+    notes = notes.filter(function (n) {
+      return !(n.targetType === 'opening' && n.targetId === opening.id);
+    });
     currentOpeningId = null;
     surfaceCache = null;
     persistActive();
@@ -543,6 +546,13 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     var missing = walls.filter(function (w) { return !w.lengthCm; });
     if (missing.length) return openNextMissing(missing[0].id);
     setMode('measure');
+  }
+
+  function cancelPickModes() {
+    notePickMode = null;
+    roomPickMode = false;
+    $('notesBtn').classList.remove('active');
+    $('roomBtn').classList.remove('active');
   }
 
   function noteTargetKey(type, id) {
@@ -565,6 +575,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 
   function openNoteTargetChooser() {
     if (!walls.length) return toast('Prima disegna la pianta');
+    cancelPickModes();
     $('noteTargetBackdrop').classList.remove('hidden');
   }
 
@@ -573,6 +584,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function startNotePick(type) {
+    cancelPickModes();
     notePickMode = type;
     closeNoteTargetChooser();
     $('notesBtn').classList.add('active');
@@ -854,6 +866,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function setMode(next, announce) {
+    cancelPickModes();
     mode = next;
     [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure']].forEach(function (pair) {
       $(pair[0]).classList.toggle('active', pair[1] === mode);
@@ -1075,6 +1088,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function openSolver() {
+    cancelPickModes();
     if (!walls.length) return toast('Prima disegna la planimetria');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
@@ -1321,6 +1335,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 
   function openRoomPicker() {
     if (!walls.length) return toast('Prima disegna la pianta');
+    cancelPickModes();
     roomPickMode = true;
     $('roomBtn').classList.add('active');
     toast('Tocca dentro l’ambiente');
@@ -1328,14 +1343,14 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function handleRoomPick(p) {
-    roomPickMode = false;
-    $('roomBtn').classList.remove('active');
     var face = findFaceAtPoint(walls, p);
     if (!face) {
-      toast('Ambiente troppo aperto o ambiguo: avvicina un po’ i muri');
+      toast('Ambiente troppo aperto o ambiguo: prova un altro punto');
       vibrate(60);
       return;
     }
+    roomPickMode = false;
+    $('roomBtn').classList.remove('active');
     pendingRoomFace = face;
     var key = faceKey(face);
     var existing = rooms.find(function (r) { return r.faceKey === key || faceKey({ wallIds: r.wallIds }) === key; });
@@ -1386,6 +1401,16 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       room.faceKey = key;
       room.custom = !!custom;
     }
+    notes.forEach(function (note) {
+      if (['room', 'floor', 'ceiling'].indexOf(note.targetType) === -1) return;
+      if (note.targetId !== key && note.targetId !== room.id) return;
+      var prefix = note.targetType === 'floor' ? 'Pavimento' : note.targetType === 'ceiling' ? 'Soffitto' : 'Ambiente';
+      note.targetId = room.id;
+      note.targetKey = noteTargetKey(note.targetType, room.id);
+      note.roomName = room.name;
+      note.targetLabel = prefix + ' · ' + room.name;
+      note.updatedAt = new Date().toISOString();
+    });
     surfaceCache = null;
     persistActive();
     closeRoomModal();
@@ -1438,6 +1463,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function openSurfaces() {
+    cancelPickModes();
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
@@ -1594,6 +1620,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   function openPresentation() {
+    cancelPickModes();
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
@@ -2045,6 +2072,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   }
 
   canvas.addEventListener('pointerdown', function (e) {
+    if (e.isPrimary === false) return;
     e.preventDefault();
     var p = point(e);
     if (roomPickMode) {
@@ -2071,6 +2099,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   });
 
   canvas.addEventListener('pointermove', function (e) {
+    if (e.isPrimary === false) return;
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
@@ -2080,11 +2109,20 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   });
 
   canvas.addEventListener('pointerup', function (e) {
+    if (e.isPrimary === false) return;
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
     if (dist(currentStroke[currentStroke.length - 1], p) > 2 / viewZoom) currentStroke.push(p);
     commitStroke();
+  });
+
+  canvas.addEventListener('pointercancel', function (e) {
+    if (e.pointerId !== activePointerId) return;
+    currentStroke = null;
+    activePointerId = null;
+    updateUI();
+    render();
   });
 
   $('newPlanBtn').addEventListener('click', newPlan);
