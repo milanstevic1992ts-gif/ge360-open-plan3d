@@ -351,13 +351,62 @@ import {
     return b;
   }
 
+  function renderSiteArchive() {
+    var grid = $('siteGrid');
+    grid.innerHTML = '';
+    $('showAllSitesBtn').classList.toggle('active', activeSiteFilter === 'all');
+    $('showNoSiteBtn').classList.toggle('active', activeSiteFilter === 'none');
+
+    sites
+      .slice()
+      .sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); })
+      .forEach(function (site) {
+        var stats = siteStats(site, library);
+        var card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'site-card' + (String(activeSiteFilter) === String(site.id) ? ' active' : '');
+        var head = document.createElement('div');
+        head.className = 'site-card-head';
+        var title = document.createElement('b');
+        title.textContent = siteLabel(site);
+        var badge = document.createElement('span');
+        badge.className = 'site-status ' + site.status;
+        badge.textContent = statusLabel(site.status);
+        head.appendChild(title);
+        head.appendChild(badge);
+
+        var meta = document.createElement('div');
+        meta.className = 'site-card-meta';
+        var bits = [];
+        if (site.clientName) bits.push(site.clientName);
+        if (site.address) bits.push(site.address);
+        bits.push(stats.plans + (stats.plans === 1 ? ' rilievo' : ' rilievi'));
+        if (stats.photos) bits.push(stats.photos + ' foto');
+        meta.textContent = bits.join(' · ');
+
+        card.appendChild(head);
+        card.appendChild(meta);
+        card.addEventListener('click', function () {
+          activeSiteFilter = String(activeSiteFilter) === String(site.id) ? 'all' : site.id;
+          renderDashboard();
+        });
+        card.addEventListener('dblclick', function (e) {
+          e.preventDefault();
+          openSiteModal(site.id, null);
+        });
+        grid.appendChild(card);
+      });
+  }
+
   function renderDashboard() {
+    renderSiteArchive();
     var grid = $('planGrid');
     grid.innerHTML = '';
-    $('emptyLibrary').classList.toggle('hidden', library.length > 0);
-    library.sort(function (a, b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+    var visiblePlans = plansForSite(library, activeSiteFilter)
+      .sort(function (a, b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+    $('emptyLibrary').classList.toggle('hidden', visiblePlans.length > 0);
 
-    library.forEach(function (plan) {
+    visiblePlans.forEach(function (plan) {
       var card = document.createElement('article');
       card.className = 'plan-card';
 
@@ -372,6 +421,13 @@ import {
       var date = plan.updatedAt ? new Date(plan.updatedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       var h3 = document.createElement('h3');
       h3.textContent = plan.name || 'Rilievo';
+      var linkedSite = sites.find(function (site) { return String(site.id) === String(plan.siteId || ''); }) || null;
+      if (linkedSite) {
+        var siteLine = document.createElement('div');
+        siteLine.className = 'plan-site-line';
+        siteLine.textContent = '🏗️ ' + siteLabel(linkedSite);
+        info.appendChild(siteLine);
+      }
       var meta = document.createElement('div');
       meta.className = 'plan-meta';
       meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m² · ' : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
