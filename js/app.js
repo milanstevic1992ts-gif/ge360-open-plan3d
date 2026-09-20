@@ -558,6 +558,7 @@ import {
         if (site.address) bits.push(site.address);
         bits.push(stats.plans + (stats.plans === 1 ? ' rilievo' : ' rilievi'));
         if (stats.photos) bits.push(stats.photos + ' foto');
+        if (stats.takeoffRows) bits.push(stats.takeoffRows + ' voci computo');
         meta.textContent = bits.join(' · ');
 
         var actions=document.createElement('div');
@@ -2126,6 +2127,9 @@ import {
       photo.targetId = activePlanId || '';
       photo.targetLabel = 'SCOLLEGATA · ' + String(label || photo.targetLabel || 'Elemento eliminato');
       photo.roomName = null;
+      photo.targetPoint = null;
+      photo.directionDeg = null;
+      updatePhotoMetadata(photo.id,{targetType:'plan',targetId:activePlanId || '',targetLabel:photo.targetLabel,roomName:null,targetPoint:null,directionDeg:null}).catch(function () {});
     });
   }
 
@@ -3722,6 +3726,10 @@ import {
       var restored=clone(backup.snapshot);
       restored.id=plan.id;
       restored.updatedAt=new Date().toISOString();
+      if (restored.siteId && !sites.some(function (site) { return String(site.id)===String(restored.siteId); })) {
+        restored.siteId=null;
+        restored.site=null;
+      }
       ensureBackendMetadata(restored);
       if (restored.backend) {
         restored.backend.status='LOCAL';
