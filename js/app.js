@@ -1,3 +1,5 @@
+import { solveFloorPlan } from '../geometry-engine/index.js';
+
 (function () {
   'use strict';
 
@@ -26,8 +28,11 @@
   var dpr = 1;
   var viewZoom = 1;
   var viewRotation = 0;
-  var MIN_ZOOM = 0.5;
-  var MAX_ZOOM = 3;
+  var MIN_ZOOM = 0.1;
+  var MAX_ZOOM = 5;
+  var solverMode = 'normal';
+  var solverResult = null;
+  var solverOriginal = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -617,6 +622,254 @@
     };
   }
 
+  function solverInput() {
+    return {
+      version: 4,
+      planId: activePlanId,
+      walls: clone(walls),
+      openings: clone(openings)
+    };
+  }
+
+  function openSolver() {
+    if (!walls.length) return toast('Prima disegna la planimetria');
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) {
+      toast('Mancano ' + missing.length + ' misure dei muri');
+      return openNextMissing(missing[0].id);
+    }
+    var incompleteOpenings = openings.filter(function (o) {
+      return !Number.isFinite(o.widthCm) || o.widthCm <= 0 || !Number.isFinite(o.offsetCm) || o.offsetCm < 0;
+    });
+    if (incompleteOpenings.length) {
+      toast('Completa prima le misure di porte e finestre');
+      return;
+    }
+
+    solverOriginal = {
+      rawStrokes: clone(rawStrokes),
+      walls: clone(walls),
+      openings: clone(openings)
+    };
+    $('solveBackdrop').classList.remove('hidden');
+    runSolver(solverMode);
+  }
+
+  function closeSolver() {
+    $('solveBackdrop').classList.add('hidden');
+    solverResult = null;
+    solverOriginal = null;
+  }
+
+  function runSolver(nextMode) {
+    solverMode = nextMode || 'normal';
+    document.querySelectorAll('[data-solver-mode]').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.solverMode === solverMode);
+    });
+
+    try {
+      solverResult = solveFloorPlan(solverInput(), { mode: solverMode });
+    } catch (e) {
+      solverResult = {
+        success: false,
+        status: 'invalid',
+        walls: [],
+        openings: [],
+        warnings: [],
+        errors: [{ type: 'engine_exception', severity: 'error', message: e && e.message ? e.message : String(e) }],
+        closure: { closed: false, errorCm: null },
+        stats: { snappedAngles: 0, timeMs: 0 }
+      };
+    }
+    renderSolverComparison();
+  }
+
+  function solverPointBounds(wallList) {
+    var pts = [];
+    (wallList || []).forEach(function (w) {
+      if (w && w.a && Number.isFinite(w.a.x) && Number.isFinite(w.a.y)) pts.push(w.a);
+      if (w && w.b && Number.isFinite(w.b.x) && Number.isFinite(w.b.y)) pts.push(w.b);
+    });
+    if (!pts.length) return null;
+    var minX = Math.min.apply(null, pts.map(function (p) { return p.x; }));
+    var minY = Math.min.apply(null, pts.map(function (p) { return p.y; }));
+    var maxX = Math.max.apply(null, pts.map(function (p) { return p.x; }));
+    var maxY = Math.max.apply(null, pts.map(function (p) { return p.y; }));
+    return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+  }
+
+  function drawSolverCanvas(canvasEl, wallList, openingList, solved) {
+    var rect = canvasEl.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var ratio = Math.min(2, window.devicePixelRatio || 1);
+    canvasEl.width = Math.round(rect.width * ratio);
+    canvasEl.height = Math.round(rect.height * ratio);
+    var pc = canvasEl.getContext('2d');
+    pc.setTransform(ratio, 0, 0, ratio, 0, 0);
+    pc.clearRect(0, 0, rect.width, rect.height);
+    pc.fillStyle = solved ? '#faf5ff' : '#ffffff';
+    pc.fillRect(0, 0, rect.width, rect.height);
+
+    var usable = (wallList || []).filter(function (w) { return w && w.a && w.b; });
+    var bounds = solverPointBounds(usable);
+    if (!bounds) return;
+    var bw = Math.max(1, bounds.maxX - bounds.minX);
+    var bh = Math.max(1, bounds.maxY - bounds.minY);
+    var scale = Math.min((rect.width - 30) / bw, (rect.height - 42) / bh);
+    var ox = (rect.width - bw * scale) / 2 - bounds.minX * scale;
+    var oy = (rect.height - bh * scale) / 2 - bounds.minY * scale;
+
+    function tp(p) { return { x: p.x * scale + ox, y: p.y * scale + oy }; }
+
+    pc.lineCap = 'round';
+    pc.lineJoin = 'round';
+    usable.forEach(function (w) {
+      var a = tp(w.a), b = tp(w.b);
+      pc.strokeStyle = solved ? '#5b21b6' : '#0f172a';
+      pc.lineWidth = 5;
+      pc.beginPath();
+      pc.moveTo(a.x, a.y);
+      pc.lineTo(b.x, b.y);
+      pc.stroke();
+
+      if (w.lengthCm) {
+        var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        var label = (w.lengthCm / 100).toFixed(2).replace('.', ',') + ' m';
+        pc.font = '800 9px system-ui';
+        var tw = pc.measureText(label).width + 8;
+        pc.fillStyle = 'rgba(255,255,255,.94)';
+        pc.fillRect(mx - tw / 2, my - 8, tw, 16);
+        pc.fillStyle = '#334155';
+        pc.textAlign = 'center';
+        pc.textBaseline = 'middle';
+        pc.fillText(label, mx, my);
+      }
+    });
+
+    (openingList || []).forEach(function (o) {
+      var p = null;
+      if (solved && o.center && Number.isFinite(o.center.x)) {
+        p = tp(o.center);
+      } else {
+        var wall = usable.find(function (w) { return w.id === o.wallId; });
+        if (wall && Number.isFinite(o.position)) {
+          p = tp({
+            x: wall.a.x + (wall.b.x - wall.a.x) * o.position,
+            y: wall.a.y + (wall.b.y - wall.a.y) * o.position
+          });
+        }
+      }
+      if (!p) return;
+      pc.fillStyle = o.type === 'door' ? '#22c55e' : '#06b6d4';
+      pc.beginPath();
+      pc.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      pc.fill();
+    });
+  }
+
+  function renderSolverComparison() {
+    if (!solverOriginal || !solverResult) return;
+    requestAnimationFrame(function () {
+      drawSolverCanvas($('solverBefore'), solverOriginal.walls, solverOriginal.openings, false);
+      drawSolverCanvas($('solverAfter'), solverResult.walls, solverResult.openings, true);
+    });
+
+    var summaryEl = $('solverSummary');
+    var closure = solverResult.closure || {};
+    var stats = solverResult.stats || {};
+    var gap = Number.isFinite(closure.errorCm) ? closure.errorCm : null;
+    var gapText = gap == null ? 'nessun loop chiuso' : (closure.closed ? 'chiusura OK' : 'scarto ' + String(gap).replace('.', ',') + ' cm');
+    if (solverResult.errors && solverResult.errors.length) {
+      summaryEl.className = 'solver-summary error';
+      summaryEl.textContent = 'Non applicabile · ' + solverResult.errors.length + ' errori · ' + gapText;
+    } else if ((solverResult.warnings && solverResult.warnings.some(function (w) { return w.severity === 'warning'; })) || !closure.closed) {
+      summaryEl.className = 'solver-summary warn';
+      summaryEl.textContent = 'Sistemata con avvisi · ' + gapText + ' · ' + (stats.snappedAngles || 0) + ' correzioni angolari';
+    } else {
+      summaryEl.className = 'solver-summary ok';
+      summaryEl.textContent = 'Pianta sistemata ✓ · ' + gapText + ' · ' + (stats.snappedAngles || 0) + ' correzioni · ' + (stats.timeMs || 0) + ' ms';
+    }
+
+    var messages = $('solverMessages');
+    messages.innerHTML = '';
+    var all = []
+      .concat((solverResult.errors || []).map(function (x) { return { kind: 'error', message: x.message }; }))
+      .concat((solverResult.warnings || []).filter(function (x) { return x.severity !== 'info'; }).map(function (x) { return { kind: 'warn', message: x.message }; }));
+    all.slice(0, 5).forEach(function (m) {
+      var el = document.createElement('div');
+      el.className = 'solver-message ' + (m.kind === 'error' ? 'error' : '');
+      el.textContent = m.message;
+      messages.appendChild(el);
+    });
+    if (!all.length) {
+      var ok = document.createElement('div');
+      ok.className = 'solver-message info';
+      ok.textContent = 'Nessuna incongruenza importante rilevata.';
+      messages.appendChild(ok);
+    }
+
+    $('applySolverBtn').disabled = !solverResult.success || !(solverResult.walls || []).some(function (w) { return w.status === 'solved'; });
+  }
+
+  function applySolverResult() {
+    if (!solverResult || !solverResult.success) return;
+    var solvedWalls = (solverResult.walls || []).filter(function (w) { return w.status === 'solved' && w.a && w.b; });
+    if (!solvedWalls.length) return;
+
+    checkpoint();
+    var plan = currentPlan();
+    if (plan) {
+      if (!Array.isArray(plan.geometryHistory)) plan.geometryHistory = [];
+      plan.geometryHistory.push({
+        savedAt: new Date().toISOString(),
+        mode: solverMode,
+        rawStrokes: clone(rawStrokes),
+        walls: clone(walls),
+        openings: clone(openings)
+      });
+      if (plan.geometryHistory.length > 3) plan.geometryHistory.shift();
+      plan.geometryState = {
+        engineVersion: solverResult.engineVersion || null,
+        mode: solverMode,
+        appliedAt: new Date().toISOString(),
+        closure: clone(solverResult.closure || {}),
+        stats: clone(solverResult.stats || {})
+      };
+    }
+
+    var b = solverPointBounds(solvedWalls);
+    var center = viewCenter();
+    var solvedCenterX = (b.minX + b.maxX) / 2;
+    var solvedCenterY = (b.minY + b.maxY) / 2;
+    var dx = center.x - solvedCenterX;
+    var dy = center.y - solvedCenterY;
+    var byId = new Map(solvedWalls.map(function (w) { return [w.id, w]; }));
+
+    walls = walls.map(function (old) {
+      var sw = byId.get(old.id);
+      if (!sw) return old;
+      return Object.assign({}, old, {
+        a: { x: sw.a.x + dx, y: sw.a.y + dy },
+        b: { x: sw.b.x + dx, y: sw.b.y + dy },
+        lengthCm: sw.lengthCm
+      });
+    });
+
+    rawStrokes = [];
+    openings.forEach(function (o) { recalcOpeningPosition(o); });
+
+    var bw = Math.max(1, b.maxX - b.minX);
+    var bh = Math.max(1, b.maxY - b.minY);
+    viewZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((canvas.clientWidth - 70) / bw, (canvas.clientHeight - 120) / bh)));
+    viewRotation = 0;
+    updateViewControls();
+    persistActive();
+    updateUI();
+    render();
+    closeSolver();
+    toast('Pianta sistemata ✓');
+  }
+
   function openSettings() {
     $('serverUrl').value = settings.serverUrl || '';
     $('apiKey').value = settings.apiKey || '';
@@ -714,6 +967,7 @@
     $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
     $('statusPill').classList.toggle('hidden', !has);
     $('clearBtn').classList.toggle('hidden', !has);
+    $('solvePlanBtn').classList.toggle('hidden', !has);
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
@@ -903,6 +1157,14 @@
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
+  $('solvePlanBtn').addEventListener('click', openSolver);
+  $('closeSolverBtn').addEventListener('click', closeSolver);
+  $('cancelSolverBtn').addEventListener('click', closeSolver);
+  $('applySolverBtn').addEventListener('click', applySolverResult);
+  document.querySelectorAll('[data-solver-mode]').forEach(function (b) {
+    b.addEventListener('click', function () { runSolver(b.dataset.solverMode); });
+  });
+  $('solveBackdrop').addEventListener('click', function (e) { if (e.target === $('solveBackdrop')) closeSolver(); });
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
