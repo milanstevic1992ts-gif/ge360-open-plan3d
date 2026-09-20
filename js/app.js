@@ -1409,6 +1409,10 @@ import {
     if (oldLength) target.lengthCm = firstLength;
     target.derivedSplit = true;
     target.parentWallId = target.parentWallId || oldTargetId;
+    target.measurementSource = oldLength ? 'derived_t_split' : (target.measurementSource || 'unmeasured');
+    target.parentLengthCm = oldLength || target.parentLengthCm || null;
+    target.requiresMeasureVerification = !!oldLength;
+    target.splitRatio = t;
 
     var second = Object.assign({}, target, {
       id:newId,
@@ -1416,6 +1420,10 @@ import {
       b:oldB,
       lengthCm:secondLength,
       parentWallId:target.parentWallId || oldTargetId,
+      measurementSource:oldLength ? 'derived_t_split' : 'unmeasured',
+      parentLengthCm:oldLength,
+      requiresMeasureVerification:!!oldLength,
+      splitRatio:1-t,
       derivedSplit:true
     });
     walls.splice(targetIndex + 1, 0, second);
@@ -1747,6 +1755,8 @@ import {
       var wall = walls.find(function (w) { return w.id === selectedWallId; });
       if (wall) {
         wall.lengthCm = Math.round(meters * 100);
+        wall.measurementSource = 'measured';
+        wall.requiresMeasureVerification = false;
         applyLiveProportion(wall.id);
         openings.filter(function (o) { return o.wallId === wall.id; }).forEach(function (o) {
           recalcOpeningPosition(o);
@@ -2808,6 +2818,14 @@ import {
     var pendingT = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
     if (pendingT.length) checks.push({level:'warning',text:pendingT.length + ' possibili innesti a T da controllare'});
 
+    var derivedMeasures = walls.filter(function (w) { return w.requiresMeasureVerification; });
+    if (derivedMeasures.length) {
+      checks.push({
+        level:'warning',
+        text:derivedMeasures.length + ' quote di segmenti T sono stimate dalla posizione dello schizzo: verificarle sul posto'
+      });
+    }
+
     var faces = buildFaces(walls);
     rooms.forEach(function (room) {
       if (!matchRoomFace(room, faces)) {
@@ -2954,8 +2972,14 @@ import {
     var notesTitle = $('notesBtn').querySelector('b');
     if (notesTitle) notesTitle.textContent = 'INTERVENTI' + (notes.length ? ' · ' + notes.length : '');
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
-    $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
-    $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
+    var derived = walls.filter(function (w) { return w.requiresMeasureVerification; }).length;
+    $('statusPill').textContent = walls.length + ' muri · ' +
+      (missing ? missing + ' da misurare' : derived ? derived + ' quote da verificare' : 'misure complete ✓');
+    $('measureLabel').textContent = missing
+      ? 'MISURE ' + missing
+      : derived
+        ? 'MISURE ⚠ ' + derived
+        : 'MISURE ✓';
     updateHistoryButtons();
   }
 
@@ -2996,12 +3020,13 @@ import {
     var mid = worldToScreen({ x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 });
     var x = mid.x;
     var y = mid.y;
-    var text = wall.lengthCm ? (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
+    var derived = wall.measurementSource === 'derived_t_split' || wall.requiresMeasureVerification;
+    var text = wall.lengthCm ? (derived ? '≈ ' : '') + (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
     ctx.save();
     ctx.font = '900 13px system-ui';
     var width = Math.max(42, ctx.measureText(text).width + 16);
-    ctx.fillStyle = wall.lengthCm ? '#fff' : '#fef3c7';
-    ctx.strokeStyle = wall.lengthCm ? '#cbd5e1' : '#f59e0b';
+    ctx.fillStyle = !wall.lengthCm || derived ? '#fef3c7' : '#fff';
+    ctx.strokeStyle = !wall.lengthCm || derived ? '#f59e0b' : '#cbd5e1';
     ctx.lineWidth = 2;
     roundRect(x - width / 2, y - 18, width, 36, 12);
     ctx.fill();
