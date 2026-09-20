@@ -8,21 +8,32 @@
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-  <div id="app">
-    <header class="topbar">
-      <div><div class="eyebrow">GE360</div><div class="title">Rilievo veloce</div></div>
-      <div class="top-actions">
-        <button id="undoBtn" class="icon-btn" aria-label="Annulla">↶</button>
-        <button id="saveBtn" class="save-btn">SALVA</button>
+  <section id="dashboard" class="screen">
+    <header class="dash-head">
+      <div><div class="eyebrow">GE360</div><h1>I miei rilievi</h1><p>Schizzi rapidi da cantiere</p></div>
+      <button id="settingsBtn" class="round-btn" aria-label="Impostazioni">⚙</button>
+    </header>
+    <div class="dash-actions">
+      <button id="newPlanBtn" class="new-plan">＋ NUOVO RILIEVO</button>
+      <div id="serverBadge" class="server-badge offline">● Debian non collegato</div>
+    </div>
+    <main class="library-wrap">
+      <div id="emptyLibrary" class="empty-library">
+        <div class="empty-icon">📐</div><h2>Nessun rilievo</h2><p>Premi “Nuovo rilievo” e disegna la forma con un dito.</p>
       </div>
+      <div id="planGrid" class="plan-grid"></div>
+    </main>
+  </section>
+
+  <section id="editor" class="screen hidden">
+    <header class="topbar">
+      <button id="backBtn" class="icon-btn" aria-label="Torna ai rilievi">‹</button>
+      <div class="top-title"><input id="planName" value="Nuovo rilievo" maxlength="40" aria-label="Nome rilievo"></div>
+      <div class="top-actions"><button id="undoBtn" class="icon-btn" aria-label="Annulla">↶</button><button id="saveBtn" class="save-btn">SALVA</button></div>
     </header>
     <main id="stageWrap">
       <canvas id="stage"></canvas>
-      <div id="emptyHint" class="empty-hint">
-        <div class="finger">☝️</div>
-        <div class="hint-title">Disegna come su un foglio</div>
-        <div class="hint-text">Fai il giro della stanza o della casa con il dito.<br><b>Non serve essere preciso.</b></div>
-      </div>
+      <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
       <div id="statusPill" class="status-pill hidden"></div>
       <button id="clearBtn" class="clear-btn hidden">Pulisci</button>
     </main>
@@ -33,24 +44,31 @@
       <button id="measureBtn" class="tool measure"><span class="tool-icon">📏</span><span id="measureLabel">MISURE</span></button>
       <button id="doneBtn" class="tool done"><span class="tool-icon">✓</span><span>FATTO</span></button>
     </footer>
-  </div>
+  </section>
+
   <div id="sheetBackdrop" class="sheet-backdrop hidden">
     <section class="sheet">
-      <div class="grabber"></div>
-      <div id="sheetKicker" class="sheet-kicker">MISURA MURO</div>
-      <div id="sheetValue" class="sheet-value">0,00 <span>m</span></div>
+      <div class="grabber"></div><div id="sheetKicker" class="sheet-kicker">MISURA MURO</div><div id="sheetValue" class="sheet-value">0,00 <span>m</span></div>
       <div class="keypad">
         <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
         <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
         <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
         <button data-key=",">,</button><button data-key="0">0</button><button data-key="⌫">⌫</button>
       </div>
-      <div class="sheet-actions">
-        <button id="laterBtn" class="secondary">DOPO</button>
-        <button id="confirmBtn" class="primary">CONFERMA ✓</button>
-      </div>
+      <div class="sheet-actions"><button id="laterBtn" class="secondary">DOPO</button><button id="confirmBtn" class="primary">CONFERMA ✓</button></div>
     </section>
   </div>
+
+  <div id="settingsBackdrop" class="modal-backdrop hidden">
+    <section class="settings-card">
+      <div class="settings-head"><div><div class="eyebrow dark">DEBIAN</div><h2>Planner professionale</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>
+      <label>Indirizzo server<input id="serverUrl" placeholder="https://tuo-server-ge360/api/v1"></label>
+      <label>API Key<input id="apiKey" type="password" placeholder="Incolla la chiave API"></label>
+      <p class="security-note">La chiave resta sul telefono. Non viene salvata nella repo GitHub.</p>
+      <div class="settings-actions"><button id="testServerBtn" class="secondary block">TEST COLLEGAMENTO</button><button id="saveSettingsBtn" class="primary block">SALVA</button></div>
+    </section>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
   <script src="js/app.js"></script>
 </body>
