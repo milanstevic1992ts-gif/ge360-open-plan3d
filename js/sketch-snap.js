@@ -121,6 +121,7 @@ export function snapPolylineCornersToWalls(points, existingWalls, options = {}) 
       wallId: String(best.wall.id),
       end: best.end,
       point: copyPoint(corner),
+      originalPoint: copyPoint(best.point),
       distance: best.distance,
       mode: newOri === 'h' && oldOri === 'v' || newOri === 'v' && oldOri === 'h'
         ? 'orthogonal'
