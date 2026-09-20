@@ -1,5 +1,6 @@
 import { solveFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
+import { straightenPolyline } from './sketch-snap.js';
 
 (function () {
   'use strict';
@@ -430,7 +431,10 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     activePointerId = null;
     if (!points || points.length < 2 || pathLength(points) < 45 / viewZoom) { render(); return; }
 
-    var simp = simplify(points);
+    var simp = straightenPolyline(simplify(points), {
+      axisToleranceDeg: 25,
+      minSegment: 1 / viewZoom
+    });
     if (simp.length < 2) return;
 
     checkpoint();
