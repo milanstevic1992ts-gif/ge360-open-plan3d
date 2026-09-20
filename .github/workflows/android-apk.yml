@@ -1,4 +1,4 @@
-name: GE360 Rilievo APK
+name: GE360 Rilievo v1.2 APK
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +28,13 @@ jobs:
           java-version: "21"
 
       - name: Check JavaScript
-        run: node --check js/app.js
+        run: |
+          cp js/app.js /tmp/ge360-app.mjs
+          cp js/room-surfaces.js /tmp/ge360-room-surfaces.mjs
+          cp js/sketch-snap.js /tmp/ge360-sketch-snap.mjs
+          node --check /tmp/ge360-app.mjs
+          node --check /tmp/ge360-room-surfaces.mjs
+          node --check /tmp/ge360-sketch-snap.mjs
 
       - name: Prepare Capacitor
         run: |
@@ -50,16 +56,39 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Build debug APK
+      - name: Set Android version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("android/app/build.gradle")
+          s=p.read_text()
+          s=s.replace("versionCode 1", "versionCode 3")
+          s=s.replace('versionName "1.0"', 'versionName "1.2"')
+          p.write_text(s)
+          PY
+          grep -nE "versionCode|versionName" android/app/build.gradle
+
+      - name: Build unsigned release
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleRelease --stacktrace
 
-      - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk GE360-Rilievo-debug.apk
+      - name: Prepare artifact
+        run: |
+          APK="$(find android/app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          test -f "$APK"
+          cp "$APK" GE360-Rilievo-v1.2-unsigned.apk
 
-      - name: Upload APK
+      - name: Bundle Android signing tool
+        run: |
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -x "$BUILD_TOOLS/apksigner"
+          tar -C "$BUILD_TOOLS" -czf android-apksigner-linux.tar.gz apksigner lib/apksigner.jar
+
+      - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: GE360-Rilievo-APK
-          path: GE360-Rilievo-v1-debug.apk
-          retention-days: 14
+          name: GE360-Rilievo-v1.2-Unsigned
+          path: |
+            GE360-Rilievo-v1.2-unsigned.apk
+            android-apksigner-linux.tar.gz
+          retention-days: 3
