@@ -42,7 +42,11 @@
         <button id="zoomInBtn" aria-label="Zoom avanti">＋</button>
         <button id="rotateBtn" class="rotate-view" aria-label="Ruota planimetria di 90 gradi">↻ 90°</button>
       </div>
-      <button id="solvePlanBtn" class="solve-plan-btn hidden">✨ SISTEMA PIANTA</button>
+      <div class="work-actions">
+        <button id="roomBtn" class="room-btn hidden">🏷 AMBIENTE</button>
+        <button id="surfacesBtn" class="surfaces-btn hidden">📐 SUPERFICI</button>
+        <button id="solvePlanBtn" class="solve-plan-btn hidden">✨ SISTEMA PIANTA</button>
+      </div>
     </main>
     <footer class="bottom-bar">
       <button id="drawBtn" class="tool active"><span class="tool-icon">✏️</span><span>SCHIZZA</span></button>
@@ -99,6 +103,48 @@
         <button id="cancelSolverBtn" class="secondary">ANNULLA</button>
         <button id="applySolverBtn" class="primary">USA VERSIONE SISTEMATA ✓</button>
       </div>
+    </section>
+  </div>
+
+  <div id="roomBackdrop" class="modal-backdrop hidden">
+    <section class="room-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">AMBIENTE</div><h2>Che stanza è?</h2></div>
+        <button id="closeRoomBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div class="room-presets">
+        <button data-room-name="Open space">OPEN SPACE</button>
+        <button data-room-name="Cucina">CUCINA</button>
+        <button data-room-name="Bagno">BAGNO</button>
+        <button data-room-name="Camera">CAMERA</button>
+        <button data-room-name="Soggiorno">SOGGIORNO</button>
+        <button data-room-name="Corridoio">CORRIDOIO</button>
+        <button data-room-name="Ingresso">INGRESSO</button>
+        <button data-room-name="Ripostiglio">RIPOSTIGLIO</button>
+        <button data-room-name="Terrazza">TERRAZZA</button>
+        <button data-room-name="Altro">ALTRO</button>
+      </div>
+      <label class="room-custom-label">Nome personalizzato
+        <input id="roomCustomName" placeholder="Es. Studio, lavanderia...">
+      </label>
+      <button id="saveRoomBtn" class="primary block">SALVA AMBIENTE ✓</button>
+    </section>
+  </div>
+
+  <div id="surfacesBackdrop" class="modal-backdrop hidden">
+    <section class="surfaces-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">RIEPILOGO</div><h2>Superfici indicative</h2></div>
+        <button id="closeSurfacesBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div class="height-row">
+        <label>Altezza pareti
+          <div class="height-input-wrap"><input id="wallHeightInput" inputmode="decimal" value="2,70"><span>m</span></div>
+        </label>
+      </div>
+      <div id="surfaceTotals" class="surface-totals"></div>
+      <div class="surface-note">Pareti lorde: <b>porte e finestre non vengono sottratte.</b> Il soffitto viene considerato uguale al pavimento.</div>
+      <div id="surfaceRooms" class="surface-rooms"></div>
     </section>
   </div>
 
