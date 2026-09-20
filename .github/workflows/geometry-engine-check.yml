@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6 ]
   workflow_dispatch:
 
 permissions:
@@ -86,6 +86,39 @@ jobs:
           assert.ok(Math.abs(m.totals.wallsM2 - 37.8) < 1e-9);
           assert.ok(Math.abs(m.totals.wallsCeilingM2 - 49.8) < 1e-9);
           assert.equal(m.roomMetrics[0].room.name, 'Cucina');
+
+          // Gap indicativo: ultimo muro termina 20 cm prima del primo.
+          const gap20 = [
+            { id:'w1', a:{x:0,y:0}, b:{x:400,y:0}, lengthCm:400 },
+            { id:'w2', a:{x:400,y:0}, b:{x:400,y:300}, lengthCm:300 },
+            { id:'w3', a:{x:400,y:300}, b:{x:0,y:300}, lengthCm:400 },
+            { id:'w4', a:{x:0,y:300}, b:{x:0,y:20}, lengthCm:280 }
+          ];
+          const m20 = calculateSurfaces(gap20, [], 2.7);
+          assert.equal(m20.faces.length, 1);
+          assert.equal(m20.faces[0].quality, 'estimated');
+          assert.ok(Math.abs(m20.faces[0].maxGapCm - 20) < 0.5);
+
+          // Gap più grande ma ancora utilizzabile: 60 cm -> DA VERIFICARE.
+          const gap60 = [
+            { id:'w1', a:{x:0,y:0}, b:{x:400,y:0}, lengthCm:400 },
+            { id:'w2', a:{x:400,y:0}, b:{x:400,y:300}, lengthCm:300 },
+            { id:'w3', a:{x:400,y:300}, b:{x:0,y:300}, lengthCm:400 },
+            { id:'w4', a:{x:0,y:300}, b:{x:0,y:60}, lengthCm:240 }
+          ];
+          const m60 = calculateSurfaces(gap60, [], 2.7);
+          assert.equal(m60.faces.length, 1);
+          assert.equal(m60.faces[0].quality, 'verify');
+
+          // Oltre 80 cm niente chiusura automatica.
+          const gap100 = [
+            { id:'w1', a:{x:0,y:0}, b:{x:400,y:0}, lengthCm:400 },
+            { id:'w2', a:{x:400,y:0}, b:{x:400,y:300}, lengthCm:300 },
+            { id:'w3', a:{x:400,y:300}, b:{x:0,y:300}, lengthCm:400 },
+            { id:'w4', a:{x:0,y:300}, b:{x:0,y:100}, lengthCm:200 }
+          ];
+          const m100 = calculateSurfaces(gap100, [], 2.7);
+          assert.equal(m100.faces.length, 0);
 
           console.log('GE360 room/surface smoke tests OK');
           NODE
