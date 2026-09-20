@@ -68,6 +68,77 @@ export function straightenPolyline(points, options = {}) {
   return collapseCollinear(out, wasClosed);
 }
 
+export function snapPolylineCornersToWalls(points, existingWalls, options = {}) {
+  const input = Array.isArray(points) ? points.map(copyPoint) : [];
+  if (input.length < 2 || !Array.isArray(existingWalls) || !existingWalls.length) {
+    return { points: input, wallUpdates: [] };
+  }
+
+  const threshold = finitePositive(options.threshold, 42);
+  const axisToleranceDeg = finitePositive(options.axisToleranceDeg, 25);
+  const out = input.map(copyPoint);
+  const updates = [];
+
+  const targets = [
+    { index: 0, neighbor: 1 },
+    { index: out.length - 1, neighbor: out.length - 2 }
+  ];
+
+  for (const target of targets) {
+    const p = out[target.index];
+    const neighbor = out[target.neighbor];
+    const newOri = snapOrientation(neighbor.x - p.x, neighbor.y - p.y, axisToleranceDeg);
+
+    let best = null;
+    for (const wall of existingWalls) {
+      if (!wall || !wall.a || !wall.b) continue;
+      for (const end of ['a', 'b']) {
+        const ep = wall[end];
+        if (!ep || !Number.isFinite(ep.x) || !Number.isFinite(ep.y)) continue;
+        const d = distance(p, ep);
+        if (d > threshold || (best && d >= best.distance)) continue;
+        best = { wall, end, point: ep, distance: d };
+      }
+    }
+
+    if (!best) continue;
+
+    const wallDx = best.wall.b.x - best.wall.a.x;
+    const wallDy = best.wall.b.y - best.wall.a.y;
+    const oldOri = snapOrientation(wallDx, wallDy, axisToleranceDeg);
+
+    let corner;
+    if (newOri === 'h' && oldOri === 'v') {
+      corner = { x: best.point.x, y: p.y };
+    } else if (newOri === 'v' && oldOri === 'h') {
+      corner = { x: p.x, y: best.point.y };
+    } else {
+      corner = { x: best.point.x, y: best.point.y };
+    }
+
+    out[target.index] = copyPoint(corner);
+    updates.push({
+      wallId: String(best.wall.id),
+      end: best.end,
+      point: copyPoint(corner),
+      distance: best.distance,
+      mode: newOri === 'h' && oldOri === 'v' || newOri === 'v' && oldOri === 'h'
+        ? 'orthogonal'
+        : 'endpoint'
+    });
+  }
+
+  return { points: out, wallUpdates: dedupeWallUpdates(updates) };
+}
+
+function dedupeWallUpdates(updates) {
+  const map = new Map();
+  for (const update of updates) {
+    map.set(update.wallId + ':' + update.end, update);
+  }
+  return Array.from(map.values());
+}
+
 export function snapOrientation(dx, dy, toleranceDeg = 25) {
   if (!Number.isFinite(dx) || !Number.isFinite(dy) || (Math.abs(dx) < 1e-12 && Math.abs(dy) < 1e-12)) {
     return 'free';
