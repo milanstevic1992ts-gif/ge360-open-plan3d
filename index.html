@@ -43,6 +43,7 @@
         <button id="rotateBtn" class="rotate-view" aria-label="Ruota planimetria di 90 gradi">↻ 90°</button>
       </div>
       <div class="work-actions">
+        <button id="presentBtn" class="present-btn hidden">👁 PRESENTA</button>
         <button id="roomBtn" class="room-btn hidden">🏷 AMBIENTE</button>
         <button id="surfacesBtn" class="surfaces-btn hidden">📐 SUPERFICI</button>
         <button id="solvePlanBtn" class="solve-plan-btn hidden">✨ SISTEMA PIANTA</button>
@@ -67,6 +68,7 @@
         <button data-key=",">,</button><button data-key="0">0</button><button data-key="⌫">⌫</button>
       </div>
       <button id="cornerToggleBtn" class="corner-toggle hidden">↔ CAMBIA ANGOLO</button>
+      <button id="deleteOpeningBtn" class="delete-opening hidden">🗑 ELIMINA APERTURA</button>
       <div class="sheet-actions"><button id="laterBtn" class="secondary">DOPO</button><button id="confirmBtn" class="primary">CONFERMA ✓</button></div>
     </section>
   </div>
@@ -145,6 +147,25 @@
       <div id="surfaceTotals" class="surface-totals"></div>
       <div class="surface-note">Calcolo <b>indicativo da cantiere</b>: piccoli gap vengono chiusi automaticamente per stimare i m². Pareti lorde: porte e finestre non vengono sottratte. Il soffitto viene considerato uguale al pavimento.</div>
       <div id="surfaceRooms" class="surface-rooms"></div>
+    </section>
+  </div>
+
+  <div id="presentationBackdrop" class="presentation-backdrop hidden">
+    <section class="presentation-sheet">
+      <header class="presentation-head">
+        <div>
+          <div class="eyebrow dark">GE360 RILIEVO</div>
+          <h2 id="presentationTitle">Planimetria</h2>
+          <div id="presentationStamp" class="presentation-stamp">Rilievo indicativo</div>
+        </div>
+        <button id="closePresentationBtn" class="round-btn light" aria-label="Chiudi presentazione">✕</button>
+      </header>
+      <div class="presentation-canvas-wrap">
+        <canvas id="presentationCanvas"></canvas>
+      </div>
+      <div id="presentationSummary" class="presentation-summary"></div>
+      <div id="presentationRooms" class="presentation-rooms"></div>
+      <div class="presentation-foot">Superfici indicative da rilievo di cantiere · pareti lorde senza detrazione di porte e finestre.</div>
     </section>
   </div>
 
