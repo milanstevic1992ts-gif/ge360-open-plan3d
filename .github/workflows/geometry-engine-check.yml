@@ -308,7 +308,7 @@ jobs:
           grep -q 'id="noteRawText"' index.html
           grep -q 'id="rewriteNoteBtn"' index.html
           grep -q "plan.notes = clone(notes)" js/app.js
-          grep -q "notes: plan.notes || \[\]" js/app.js
+          grep -q "notes: plan.notes || \[\]" js/processed-plan.js
           grep -q "settings.serverUrl + '/notes/rewrite'" js/app.js
           grep -q '@app.post("/api/v1/notes/rewrite"' backend/app.py
           grep -q "require_key(x_ge360_api_key)" backend/app.py
