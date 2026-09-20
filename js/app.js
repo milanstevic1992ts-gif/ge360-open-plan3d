@@ -1,6 +1,18 @@
 import { solveFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
 import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
+import {
+  createBackendMetadata,
+  ensureBackendMetadata,
+  refreshSourceRevision,
+  validateForProcessing,
+  buildProcessingPayload,
+  applyBackendSnapshot,
+  mergeVersions,
+  isTerminalStatus
+} from './processed-plan.js';
+import { BackendClient } from './backend-client.js';
+import { ProcessedPlanUI } from './processed-viewer.js';
 
 (function () {
   'use strict';
@@ -47,6 +59,10 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   var notePickMode = null;
   var pendingNoteTarget = null;
   var currentNoteId = null;
+  var processedUI = null;
+  var processingRunId = 0;
+  var PROCESS_POLL_MS = 2000;
+  var PROCESS_POLL_TIMEOUT_MS = 180000;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -80,6 +96,14 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   function loadAll() {
     library = parse(localStorage.getItem(LIBRARY_KEY), []);
     settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
+    var migrated = false;
+    library.forEach(function (plan) {
+      var hadBackend = !!(plan && plan.backend);
+      var hadRevision = !!(plan && plan.sourceRevision);
+      ensureBackendMetadata(plan);
+      if (!hadBackend || !hadRevision) migrated = true;
+    });
+    if (migrated) saveLibrary();
     renderDashboard();
     updateServerBadge();
   }
@@ -117,7 +141,10 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
     plan.summary = summary();
+    ensureBackendMetadata(plan);
+    refreshSourceRevision(plan);
     saveLibrary();
+    if (processedUI) processedUI.render(plan);
     if (showToast) toast('Salvato ✓');
   }
 
@@ -129,12 +156,14 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     $('editor').classList.add('hidden');
     $('dashboard').classList.remove('hidden');
     activePlanId = null;
+    if (processedUI) processedUI.showTab('raw');
     renderDashboard();
   }
 
   function showEditor() {
     $('dashboard').classList.add('hidden');
     $('editor').classList.remove('hidden');
+    if (processedUI) processedUI.showTab('raw');
     requestAnimationFrame(resize);
   }
 
@@ -151,8 +180,10 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       rooms: [],
       notes: [],
       wallHeightM: 2.70,
-      view: { zoom: 1, rotation: 0 }
+      view: { zoom: 1, rotation: 0 },
+      backend: createBackendMetadata()
     };
+    refreshSourceRevision(plan);
     library.unshift(plan);
     saveLibrary();
     openPlan(plan.id);
@@ -161,6 +192,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   function openPlan(id) {
     var plan = library.find(function (p) { return p.id === id; });
     if (!plan) return;
+    ensureBackendMetadata(plan);
     activePlanId = id;
     rawStrokes = clone(plan.rawStrokes || []);
     walls = clone(plan.walls || []);
@@ -185,7 +217,13 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     updateViewControls();
     updateUI();
     refreshSurfaceCache();
+    refreshSourceRevision(plan);
+    saveLibrary();
+    if (processedUI) processedUI.render(plan);
     render();
+    if (['UPLOADING', 'RAW', 'QUEUED', 'PROCESSING'].indexOf(plan.backend.status) !== -1 && settings.serverUrl && settings.apiKey) {
+      setTimeout(function () { resumeProcessing(plan); }, 0);
+    }
   }
 
   function deletePlan(id) {
@@ -233,7 +271,11 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
       var actions = document.createElement('div');
       actions.className = 'plan-actions';
       actions.appendChild(makeButton('APRI', 'open-plan', function () { openPlan(plan.id); }));
-      actions.appendChild(makeButton('DEBIAN', 'send-plan', function () { sendPlan(plan.id); }));
+      actions.appendChild(makeButton('ELABORA', 'send-plan', function () {
+        openPlan(plan.id);
+        if (processedUI) processedUI.showTab('processed');
+        startProcessing(false);
+      }));
       actions.appendChild(makeButton('🗑', 'delete-plan', function () { deletePlan(plan.id); }));
 
       info.appendChild(h3);
@@ -1088,21 +1130,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   }
 
   function planPayload(plan) {
-    return {
-      version: 4,
-      kind: 'ge360-rough-survey',
-      planId: plan.id,
-      name: plan.name || 'Rilievo',
-      updatedAt: plan.updatedAt || new Date().toISOString(),
-      rawStrokes: plan.rawStrokes || [],
-      walls: plan.walls || [],
-      openings: plan.openings || [],
-      rooms: plan.rooms || [],
-      notes: plan.notes || [],
-      wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
-      surfaces: plan.surfaceSummary || null,
-      summary: summary(plan)
-    };
+    var payload = buildProcessingPayload(plan);
+    payload.summary = summary(plan);
+    return payload;
   }
 
   function solverInput() {
@@ -1850,41 +1880,179 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     $('serverBadge').textContent = ok ? '● Debian configurato' : '● Debian non collegato';
   }
 
+  function backendClient(custom) {
+    return new BackendClient(Object.assign({
+      baseUrl: settings.serverUrl,
+      apiKey: settings.apiKey,
+      timeoutMs: 15000
+    }, custom || {}));
+  }
+
   async function testServer() {
     var url = $('serverUrl').value.trim().replace(/\/$/, '');
     var key = $('apiKey').value.trim();
     if (!url || !key) return toast('Inserisci URL e API Key');
     toast('Test collegamento…');
     try {
-      var res = await fetch(url + '/health', { headers: { 'X-GE360-API-Key': key } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      toast('Debian raggiungibile ✓');
+      await new BackendClient({ baseUrl: url, apiKey: key, timeoutMs: 10000 }).health();
+      toast('Backend rilievi raggiungibile ✓');
     } catch (e) {
       toast('Connessione fallita: ' + e.message);
     }
   }
 
-  async function sendPlan(id) {
-    var plan = library.find(function (p) { return p.id === id; });
+  function setProcessingState(plan, status, error) {
+    ensureBackendMetadata(plan);
+    plan.backend.status = status;
+    plan.backend.error = error || null;
+    saveLibrary();
+    if (processedUI) processedUI.render(plan);
+    renderDashboard();
+  }
+
+  function showMissingMeasures(plan, validation) {
+    var count = validation.missingWallIds.length;
+    $('missingMeasuresText').textContent = count === 1
+      ? 'Manca la misura reale di 1 muro. Il backend non riceverà una lunghezza inventata.'
+      : 'Mancano le misure reali di ' + count + ' muri. Il backend non riceverà lunghezze inventate.';
+    $('missingMeasuresBackdrop').classList.remove('hidden');
+  }
+
+  function validateBeforeProcessing(plan) {
+    var validation = validateForProcessing(plan);
+    if (!validation.hasWalls) {
+      toast('Prima disegna la planimetria');
+      return false;
+    }
+    if (validation.missingWallIds.length) {
+      showMissingMeasures(plan, validation);
+      return false;
+    }
+    if (validation.invalidOpeningIds.length) {
+      toast('Completa prima le misure di porte e finestre');
+      return false;
+    }
+    return true;
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  async function finalizeProcessing(plan, client, runId) {
+    if (runId !== processingRunId) return;
+    try {
+      var processed = await client.getProcessedPlan(plan.backend.remotePlanId);
+      applyBackendSnapshot(plan, processed || {});
+    } catch (e) {
+      // Il risultato può essere già incluso nello status. Non distruggiamo dati validi.
+      if (!plan.backend.files.svg && !plan.backend.files.png && !plan.backend.files.pdf && !plan.backend.files.plan3d && !plan.backend.files.glb) {
+        plan.backend.warnings = (plan.backend.warnings || []).concat(['Endpoint processed non disponibile: ' + e.message]);
+      }
+    }
+
+    try {
+      var versions = await client.getVersions(plan.backend.remotePlanId);
+      mergeVersions(plan, versions);
+    } catch (_) {
+      // Versioning opzionale finché il backend non lo espone.
+    }
+
+    if (plan.backend.status !== 'NEEDS_REVIEW' && plan.backend.status !== 'ERROR') plan.backend.status = 'PROCESSED';
+    if (plan.backend.status === 'PROCESSED' || plan.backend.status === 'NEEDS_REVIEW') {
+      plan.backend.sourceRevision = plan.sourceRevision;
+      plan.backend.lastProcessedAt = plan.backend.lastProcessedAt || new Date().toISOString();
+    }
+    saveLibrary();
+    if (processedUI) processedUI.render(plan);
+    renderDashboard();
+  }
+
+  async function pollProcessing(plan, client, runId) {
+    var startedAt = Date.now();
+    while (runId === processingRunId && Date.now() - startedAt < PROCESS_POLL_TIMEOUT_MS) {
+      await wait(PROCESS_POLL_MS);
+      if (runId !== processingRunId) return;
+      var snapshot = await client.getPlanStatus(plan.backend.remotePlanId);
+      applyBackendSnapshot(plan, snapshot || {});
+      saveLibrary();
+      if (processedUI) processedUI.render(plan);
+      if (isTerminalStatus(plan.backend.status)) {
+        await finalizeProcessing(plan, client, runId);
+        return;
+      }
+    }
+    if (runId === processingRunId) {
+      toast('Elaborazione ancora in corso. Lo stato resta salvato.');
+    }
+  }
+
+  async function resumeProcessing(plan) {
+    if (!plan || !plan.backend || !plan.backend.remotePlanId) return;
+    if (!['UPLOADING', 'RAW', 'QUEUED', 'PROCESSING'].includes(plan.backend.status)) return;
+    var runId = ++processingRunId;
+    var client = backendClient();
+    try {
+      var snapshot = await client.getPlanStatus(plan.backend.remotePlanId);
+      applyBackendSnapshot(plan, snapshot || {});
+      saveLibrary();
+      if (processedUI) processedUI.render(plan);
+      if (isTerminalStatus(plan.backend.status)) await finalizeProcessing(plan, client, runId);
+      else await pollProcessing(plan, client, runId);
+    } catch (e) {
+      setProcessingState(plan, 'ERROR', e.message || 'Backend non raggiungibile');
+    }
+  }
+
+  async function startProcessing(reprocess) {
+    persistActive();
+    var plan = currentPlan();
     if (!plan) return;
+    ensureBackendMetadata(plan);
+
+    if (['UPLOADING', 'RAW', 'QUEUED', 'PROCESSING'].includes(plan.backend.status)) {
+      if (processedUI) processedUI.showTab('processed');
+      return toast('ELABORAZIONE IN CORSO');
+    }
+    if (!validateBeforeProcessing(plan)) return;
     if (!settings.serverUrl || !settings.apiKey) {
       openSettings();
-      return toast('Configura prima il Debian');
+      return toast('CONFIGURA BACKEND RILIEVI');
     }
-    toast('Invio al planner…');
+
+    var runId = ++processingRunId;
+    var client = backendClient();
+    var payload = planPayload(plan);
+    setProcessingState(plan, 'UPLOADING');
+    if (processedUI) processedUI.showTab('processed');
+
     try {
-      var res = await fetch(settings.serverUrl + '/plans/refine', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-GE360-API-Key': settings.apiKey },
-        body: JSON.stringify(planPayload(plan))
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      plan.backend = { sentAt: new Date().toISOString(), status: 'sent' };
+      var started;
+      if (reprocess && plan.backend.remotePlanId) {
+        started = await client.reprocessPlan(plan.backend.remotePlanId, payload);
+        applyBackendSnapshot(plan, started || {});
+      } else {
+        var created = await client.createPlan(payload);
+        applyBackendSnapshot(plan, created || {});
+        if (!plan.backend.remotePlanId) throw new Error('Il backend non ha restituito remotePlanId');
+        started = await client.processPlan(plan.backend.remotePlanId, { sourceRevision: plan.sourceRevision });
+        applyBackendSnapshot(plan, started || {});
+      }
+
+      if (!plan.backend.remotePlanId) throw new Error('remotePlanId mancante');
+      if (!isTerminalStatus(plan.backend.status) && plan.backend.status !== 'PROCESSING') {
+        plan.backend.status = plan.backend.status === 'RAW' ? 'QUEUED' : 'PROCESSING';
+      }
       saveLibrary();
-      renderDashboard();
-      toast('Inviato al Debian ✓');
+      if (processedUI) processedUI.render(plan);
+
+      if (isTerminalStatus(plan.backend.status)) await finalizeProcessing(plan, client, runId);
+      else await pollProcessing(plan, client, runId);
     } catch (e) {
-      toast('Errore: ' + e.message);
+      if (runId !== processingRunId) return;
+      setProcessingState(plan, 'ERROR', e.message || 'Backend non raggiungibile');
+      if (processedUI) processedUI.showTab('processed');
+      toast('BACKEND NON RAGGIUNGIBILE · rilievo salvato');
     }
   }
 
@@ -1945,6 +2113,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     $('toolsBtn').classList.toggle('hidden', !has);
     $('clearBtn').classList.toggle('hidden', !has);
     $('solvePlanBtn').classList.toggle('hidden', !has);
+    $('elaborateBtn').classList.toggle('hidden', !has);
     $('roomBtn').classList.toggle('hidden', !has);
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
@@ -2226,6 +2395,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   $('closePresentationBtn').addEventListener('click', closePresentation);
   $('presentationBackdrop').addEventListener('click', function (e) { if (e.target === $('presentationBackdrop')) closePresentation(); });
   $('solvePlanBtn').addEventListener('click', function () { runTool(openSolver); });
+  $('elaborateBtn').addEventListener('click', function () { runTool(function () { startProcessing(false); }); });
   $('closeSolverBtn').addEventListener('click', closeSolver);
   $('cancelSolverBtn').addEventListener('click', closeSolver);
   $('applySolverBtn').addEventListener('click', applySolverResult);
@@ -2255,12 +2425,29 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
+  $('closeMissingMeasuresBtn').addEventListener('click', function () { $('missingMeasuresBackdrop').classList.add('hidden'); });
+  $('missingMeasuresBackdrop').addEventListener('click', function (e) { if (e.target === $('missingMeasuresBackdrop')) $('missingMeasuresBackdrop').classList.add('hidden'); });
+  $('insertMissingMeasuresBtn').addEventListener('click', function () {
+    $('missingMeasuresBackdrop').classList.add('hidden');
+    if (processedUI) processedUI.showTab('raw');
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) openNextMissing(missing[0].id);
+  });
   $('settingsBackdrop').addEventListener('click', function (e) { if (e.target === $('settingsBackdrop')) closeSettings(); });
   window.addEventListener('resize', function () {
     resize();
     if (presentationModel) requestAnimationFrame(renderPresentation);
   });
   document.addEventListener('visibilitychange', function () { if (document.hidden && activePlanId) persistActive(); });
+
+  processedUI = new ProcessedPlanUI({
+    getPlan: currentPlan,
+    getClient: backendClient,
+    toast: toast,
+    onElaborate: function () { startProcessing(false); },
+    onReprocess: function () { startProcessing(true); },
+    onConfigure: openSettings
+  });
 
   loadAll();
   showDashboard();
