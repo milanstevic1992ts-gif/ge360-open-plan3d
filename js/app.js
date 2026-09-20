@@ -22,6 +22,11 @@ import {
   openingInterval,
   mergeOpeningIntervals
 } from './site-annotations.js';
+import {
+  estimateScaleCmPerUnit,
+  applyMeasuredWallProportion,
+  findTJunctionCandidates
+} from './editor-geometry.js';
 
 (function () {
   'use strict';
@@ -46,9 +51,17 @@ import {
   var selectedWallId = null;
   var currentOpeningId = null;
   var wallMoveMode = null;
+  var openingMoveMode = null;
   var sheetType = null;
   var numberText = '';
   var history = [];
+  var future = [];
+  var liveScaleCmPerUnit = null;
+  var editorLayer = 'survey';
+  var selectedObject = null;
+  var longPressState = null;
+  var annotationHitBoxes = [];
+  var annotationDrag = null;
   var dpr = 1;
   var viewZoom = 1;
   var viewRotation = 0;
@@ -156,6 +169,8 @@ import {
     plan.rooms = clone(rooms);
     plan.notes = clone(notes);
     plan.wallHeightM = wallHeightM;
+    plan.liveScaleCmPerUnit = Number.isFinite(liveScaleCmPerUnit) ? liveScaleCmPerUnit : null;
+    plan.editorLayer = editorLayer;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
     plan.summary = summary();
@@ -198,6 +213,8 @@ import {
       rooms: [],
       notes: [],
       wallHeightM: 2.70,
+      liveScaleCmPerUnit: null,
+      editorLayer: 'survey',
       view: { zoom: 1, rotation: 0 },
       backend: createBackendMetadata()
     };
@@ -221,14 +238,22 @@ import {
     pendingNoteTarget = null;
     currentNoteId = null;
     wallHeightM = Number.isFinite(plan.wallHeightM) && plan.wallHeightM > 0 ? plan.wallHeightM : 2.70;
+    liveScaleCmPerUnit = Number.isFinite(plan.liveScaleCmPerUnit) && plan.liveScaleCmPerUnit > 0
+      ? plan.liveScaleCmPerUnit
+      : estimateScaleCmPerUnit(walls);
+    editorLayer = plan.editorLayer === 'works' ? 'works' : 'survey';
     surfaceCache = null;
     roomPickMode = false;
     viewZoom = plan.view && Number.isFinite(plan.view.zoom) ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, plan.view.zoom)) : 1;
     viewRotation = plan.view && Number.isFinite(plan.view.rotation) ? ((plan.view.rotation % 360) + 360) % 360 : 0;
     history = [];
+    future = [];
     currentStroke = null;
     selectedWallId = null;
     currentOpeningId = null;
+    selectedObject = null;
+    openingMoveMode = null;
+    annotationDrag = null;
     $('planName').value = plan.name || 'Rilievo';
     setMode('draw', false);
     showEditor();
