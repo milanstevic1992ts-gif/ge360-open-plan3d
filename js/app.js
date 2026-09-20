@@ -623,6 +623,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     }
 
     autoRepairTJunctions();
+    syncAutomaticRooms(false);
     persistActive();
     updateUI();
     render();
@@ -1632,6 +1633,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     walls = walls.filter(function (w) { return w.id !== wall.id; });
     selectedWallId = null;
     surfaceCache = null;
+    syncAutomaticRooms(false);
     closeSheet();
     refreshSurfaceCache();
     persistActive();
@@ -1685,6 +1687,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     surfaceCache = null;
     wallMoveMode = null;
     autoRepairTJunctions();
+    syncAutomaticRooms(false);
     openings.forEach(function (o) { recalcOpeningPosition(o); });
     refreshSurfaceCache();
     persistActive();
@@ -1777,6 +1780,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
       var strokeId = wall ? wall.strokeId : null;
       var next = walls.find(function (w) { return w.strokeId === strokeId && !w.lengthCm && w.id !== selectedWallId; });
       if (!next) next = walls.find(function (w) { return !w.lengthCm && w.id !== selectedWallId; });
+      syncAutomaticRooms(false);
       persistActive();
       if (next) {
         selectedWallId = next.id;
@@ -1786,6 +1790,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
         selectedWallId = null;
         closeSheet();
         refreshSurfaceCache();
+        syncAutomaticRooms(true);
         toast('Misure completate ✓');
       }
     } else if (sheetType === 'opening-width') {
@@ -2082,6 +2087,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     viewRotation = 0;
     updateViewControls();
     refreshSurfaceCache();
+    syncAutomaticRooms(true);
     persistActive();
     updateUI();
     render();
@@ -2140,23 +2146,27 @@ import { buildProgressiveTakeoff } from './takeoff.js';
       new Date().toISOString()
     );
     rooms = result.rooms;
-    if (!result.created.length) return [];
 
-    surfaceCache = null;
-    persistActive();
-    updateUI();
-    render();
+    if (result.created.length) {
+      surfaceCache = null;
+      persistActive();
+      updateUI();
+      render();
+    }
 
-    if (promptNew && $('roomBackdrop').classList.contains('hidden') && $('sheetBackdrop').classList.contains('hidden')) {
-      var created = result.created[0];
-      var face = faces.find(function (f) { return faceKey(f) === created.faceKey; }) || null;
+    var pendingAuto = rooms.find(function (room) {
+      return room && room.needsNaming && !room.geometryMissing;
+    }) || null;
+
+    if (promptNew && pendingAuto && $('roomBackdrop').classList.contains('hidden') && $('sheetBackdrop').classList.contains('hidden')) {
+      var face = faces.find(function (f) { return faceKey(f) === pendingAuto.faceKey; }) || null;
       if (face) {
         setTimeout(function () {
-          openRoomEditorForFace(face, created, true);
+          openRoomEditorForFace(face, pendingAuto, true);
           vibrate(24);
         }, 0);
       }
-    } else {
+    } else if (result.created.length) {
       toast(result.created.length === 1 ? 'Nuovo ambiente riconosciuto ✓' : result.created.length + ' ambienti riconosciuti ✓');
     }
     return result.created;
