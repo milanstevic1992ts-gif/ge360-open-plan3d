@@ -24,6 +24,10 @@
   var numberText = '';
   var history = [];
   var dpr = 1;
+  var viewZoom = 1;
+  var viewRotation = 0;
+  var MIN_ZOOM = 0.5;
+  var MAX_ZOOM = 3;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -85,6 +89,7 @@
     plan.rawStrokes = clone(rawStrokes);
     plan.walls = clone(walls);
     plan.openings = clone(openings);
+    plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.summary = summary();
     saveLibrary();
     if (showToast) toast('Salvato ✓');
@@ -113,7 +118,8 @@
       updatedAt: now,
       rawStrokes: [],
       walls: [],
-      openings: []
+      openings: [],
+      view: { zoom: 1, rotation: 0 }
     };
     library.unshift(plan);
     saveLibrary();
@@ -127,6 +133,8 @@
     rawStrokes = clone(plan.rawStrokes || []);
     walls = clone(plan.walls || []);
     openings = clone(plan.openings || []);
+    viewZoom = plan.view && Number.isFinite(plan.view.zoom) ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, plan.view.zoom)) : 1;
+    viewRotation = plan.view && Number.isFinite(plan.view.rotation) ? ((plan.view.rotation % 360) + 360) % 360 : 0;
     history = [];
     currentStroke = null;
     selectedWallId = null;
@@ -134,6 +142,7 @@
     $('planName').value = plan.name || 'Rilievo';
     setMode('draw', false);
     showEditor();
+    updateViewControls();
     updateUI();
     render();
   }
@@ -251,9 +260,79 @@
     vibrate(20);
   }
 
+  function viewCenter() {
+    return { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 };
+  }
+
+  function worldToScreen(p) {
+    var center = viewCenter();
+    var dx = p.x - center.x;
+    var dy = p.y - center.y;
+    var rad = viewRotation * Math.PI / 180;
+    var cos = Math.cos(rad);
+    var sin = Math.sin(rad);
+    return {
+      x: center.x + (dx * cos - dy * sin) * viewZoom,
+      y: center.y + (dx * sin + dy * cos) * viewZoom
+    };
+  }
+
+  function screenToWorld(p) {
+    var center = viewCenter();
+    var dx = (p.x - center.x) / viewZoom;
+    var dy = (p.y - center.y) / viewZoom;
+    var rad = viewRotation * Math.PI / 180;
+    var cos = Math.cos(rad);
+    var sin = Math.sin(rad);
+    return {
+      x: center.x + dx * cos + dy * sin,
+      y: center.y - dx * sin + dy * cos
+    };
+  }
+
   function point(e) {
     var r = canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    return screenToWorld({ x: e.clientX - r.left, y: e.clientY - r.top });
+  }
+
+  function updateViewControls() {
+    $('zoomResetBtn').textContent = Math.round(viewZoom * 100) + '%';
+  }
+
+  function setZoom(next) {
+    viewZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    updateViewControls();
+    persistActive();
+    render();
+    vibrate(10);
+  }
+
+  function rotateView() {
+    viewRotation = (viewRotation + 90) % 360;
+    persistActive();
+    render();
+    vibrate(18);
+    toast('Vista ruotata ' + viewRotation + '°');
+  }
+
+  function resetView() {
+    viewZoom = 1;
+    viewRotation = 0;
+    updateViewControls();
+    persistActive();
+    render();
+    toast('Vista ripristinata');
+  }
+
+  function openingReferenceLabel(opening) {
+    if (!opening) return 'SINISTRO';
+    var wall = walls.find(function (w) { return w.id === opening.wallId; });
+    if (!wall) return opening.referenceEnd === 'b' ? 'DESTRO' : 'SINISTRO';
+    var a = worldToScreen(wall.a);
+    var b = worldToScreen(wall.b);
+    if (Math.abs(a.x - b.x) < 1) return opening.referenceEnd === 'b' ? 'DESTRO' : 'SINISTRO';
+    var leftEnd = a.x < b.x ? 'a' : 'b';
+    return opening.referenceEnd === leftEnd ? 'SINISTRO' : 'DESTRO';
   }
 
   function dist(a, b) {
@@ -294,7 +373,7 @@
   function simplify(points) {
     var out = points;
     for (var eps = 10; eps <= 34; eps += 4) {
-      out = rdp(points, eps);
+      out = rdp(points, eps / viewZoom);
       if (out.length <= 14) break;
     }
     if (out.length >= 3 && dist(out[0], out[out.length - 1]) < 58) out[out.length - 1] = { x: out[0].x, y: out[0].y };
@@ -305,7 +384,7 @@
     var points = currentStroke;
     currentStroke = null;
     activePointerId = null;
-    if (!points || points.length < 2 || pathLength(points) < 45) { render(); return; }
+    if (!points || points.length < 2 || pathLength(points) < 45 / viewZoom) { render(); return; }
 
     var simp = simplify(points);
     if (simp.length < 2) return;
@@ -320,7 +399,7 @@
     rawStrokes.push(stroke);
 
     for (var i = 1; i < simp.length; i++) {
-      if (dist(simp[i - 1], simp[i]) < 24) continue;
+      if (dist(simp[i - 1], simp[i]) < 24 / viewZoom) continue;
       var wall = {
         id: uid('w'),
         strokeId: stroke.id,
@@ -347,7 +426,7 @@
     var best = null;
     walls.forEach(function (wall) {
       var h = distToSegment(p, wall.a, wall.b);
-      if (h.distance <= 55 && (!best || h.distance < best.distance)) best = { wall: wall, distance: h.distance, t: h.t };
+      if (h.distance <= 55 / viewZoom && (!best || h.distance < best.distance)) best = { wall: wall, distance: h.distance, t: h.t };
     });
     return best;
   }
@@ -430,10 +509,11 @@
         $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
         $('cornerToggleBtn').classList.add('hidden');
       } else if (type === 'opening-offset') {
-        var side = o && o.referenceEnd === 'b' ? 'ANGOLO B' : 'ANGOLO A';
-        $('sheetKicker').textContent = 'DISTANZA ' + side + ' → BORDO ' + (o && o.type === 'door' ? 'PORTA' : 'FINESTRA');
+        var side = openingReferenceLabel(o);
+        var otherSide = side === 'SINISTRO' ? 'DESTRO' : 'SINISTRO';
+        $('sheetKicker').textContent = 'DISTANZA ANGOLO ' + side + ' → BORDO ' + (o && o.type === 'door' ? 'PORTA' : 'FINESTRA');
         $('cornerToggleBtn').classList.remove('hidden');
-        $('cornerToggleBtn').textContent = '↔ CAMBIA ANGOLO (' + side + ')';
+        $('cornerToggleBtn').textContent = '↔ USA ANGOLO ' + otherSide;
       }
     }
     if (type === 'wall') $('cornerToggleBtn').classList.add('hidden');
@@ -646,9 +726,13 @@
     ctx.lineWidth = width;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    var firstScreen = worldToScreen(points[0]);
     ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (var i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.moveTo(firstScreen.x, firstScreen.y);
+    for (var i = 1; i < points.length; i++) {
+      var sp = worldToScreen(points[i]);
+      ctx.lineTo(sp.x, sp.y);
+    }
     ctx.stroke();
     ctx.restore();
   }
@@ -665,8 +749,9 @@
   }
 
   function drawMeasure(wall) {
-    var x = (wall.a.x + wall.b.x) / 2;
-    var y = (wall.a.y + wall.b.y) / 2;
+    var mid = worldToScreen({ x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 });
+    var x = mid.x;
+    var y = mid.y;
     var text = wall.lengthCm ? (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
     ctx.save();
     ctx.font = '900 13px system-ui';
@@ -687,8 +772,13 @@
   function drawOpening(opening) {
     var wall = walls.find(function (w) { return w.id === opening.wallId; });
     if (!wall) return;
-    var x = wall.a.x + (wall.b.x - wall.a.x) * opening.position;
-    var y = wall.a.y + (wall.b.y - wall.a.y) * opening.position;
+    var wp = {
+      x: wall.a.x + (wall.b.x - wall.a.x) * opening.position,
+      y: wall.a.y + (wall.b.y - wall.a.y) * opening.position
+    };
+    var openingScreen = worldToScreen(wp);
+    var x = openingScreen.x;
+    var y = openingScreen.y;
     ctx.save();
     ctx.fillStyle = opening.type === 'door' ? '#22c55e' : '#06b6d4';
     ctx.strokeStyle = '#fff';
@@ -705,20 +795,22 @@
     ctx.restore();
 
     if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
-      var corner = opening.referenceEnd === 'b' ? wall.b : wall.a;
+      var cornerWorld = opening.referenceEnd === 'b' ? wall.b : wall.a;
+      var corner = worldToScreen(cornerWorld);
+      var sideShort = openingReferenceLabel(opening) === 'SINISTRO' ? 'SX' : 'DX';
       ctx.save();
       ctx.fillStyle = '#f59e0b';
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.arc(corner.x, corner.y, 12, 0, Math.PI * 2);
+      ctx.arc(corner.x, corner.y, 15, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#0f172a';
-      ctx.font = '1000 11px system-ui';
+      ctx.font = '1000 10px system-ui';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(opening.referenceEnd === 'b' ? 'B' : 'A', corner.x, corner.y + 1);
+      ctx.fillText(sideShort, corner.x, corner.y + 1);
       ctx.restore();
     }
   }
@@ -737,9 +829,11 @@
       ctx.strokeStyle = wall.id === selectedWallId ? '#2563eb' : '#0f172a';
       ctx.lineWidth = wall.id === selectedWallId ? 10 : 8;
       ctx.lineCap = 'round';
+      var sa = worldToScreen(wall.a);
+      var sb = worldToScreen(wall.b);
       ctx.beginPath();
-      ctx.moveTo(wall.a.x, wall.a.y);
-      ctx.lineTo(wall.b.x, wall.b.y);
+      ctx.moveTo(sa.x, sa.y);
+      ctx.lineTo(sb.x, sb.y);
       ctx.stroke();
       ctx.restore();
     });
@@ -776,7 +870,7 @@
     e.preventDefault();
     var p = point(e);
     var last = currentStroke[currentStroke.length - 1];
-    if (dist(last, p) >= 3) currentStroke.push(p);
+    if (dist(last, p) >= 3 / viewZoom) currentStroke.push(p);
     render();
   });
 
@@ -784,7 +878,7 @@
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
-    if (dist(currentStroke[currentStroke.length - 1], p) > 2) currentStroke.push(p);
+    if (dist(currentStroke[currentStroke.length - 1], p) > 2 / viewZoom) currentStroke.push(p);
     commitStroke();
   });
 
@@ -805,6 +899,10 @@
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
+  $('zoomOutBtn').addEventListener('click', function () { setZoom(viewZoom / 1.25); });
+  $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
+  $('zoomResetBtn').addEventListener('click', resetView);
+  $('rotateBtn').addEventListener('click', rotateView);
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
