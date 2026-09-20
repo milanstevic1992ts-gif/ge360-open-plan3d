@@ -1231,6 +1231,9 @@ import { buildProgressiveTakeoff } from './takeoff.js';
       context: {
         areaM2: metric && Number.isFinite(metric.floorM2) ? Number(metric.floorM2.toFixed(2)) : null,
         ceilingM2: metric && Number.isFinite(metric.ceilingM2) ? Number(metric.ceilingM2.toFixed(2)) : null,
+        perimeterM: metric && Number.isFinite(metric.perimeterM) ? Number(metric.perimeterM.toFixed(2)) : null,
+        wallsM2: metric && Number.isFinite(metric.wallsM2) ? Number(metric.wallsM2.toFixed(2)) : null,
+        wallsCeilingM2: metric && Number.isFinite(metric.wallsCeilingM2) ? Number(metric.wallsCeilingM2.toFixed(2)) : null,
         wallHeightM: wallHeightM
       }
     };
@@ -2698,7 +2701,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
       var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
       var title = String(room.name || 'Ambiente').toUpperCase();
       var state = surfaceStatus(metric ? metric.status : face.quality);
-      var statusText = state.label;
+      var statusText = room.needsNaming ? 'DA NOMINARE' : state.label;
 
       ctx.save();
       ctx.font = '1000 12px system-ui';
@@ -2709,8 +2712,8 @@ import { buildProgressiveTakeoff } from './takeoff.js';
       var w3 = ctx.measureText(statusText).width;
       var boxW = Math.max(w1, w2, w3) + 20;
       var boxH = area ? 58 : 42;
-      ctx.fillStyle = 'rgba(255,255,255,.94)';
-      ctx.strokeStyle = '#cbd5e1';
+      ctx.fillStyle = room.needsNaming ? 'rgba(255,251,235,.97)' : 'rgba(255,255,255,.94)';
+      ctx.strokeStyle = room.needsNaming ? '#f59e0b' : '#cbd5e1';
       ctx.lineWidth = 1.5;
       roundRect(p.x - boxW / 2, p.y - boxH / 2, boxW, boxH, 11);
       ctx.fill();
@@ -2725,7 +2728,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
         ctx.font = '800 11px system-ui';
         ctx.fillText(area, p.x, p.y + 3);
       }
-      ctx.fillStyle = state.cls === 'ok' ? '#15803d' : state.cls === 'estimated' ? '#b45309' : '#b91c1c';
+      ctx.fillStyle = room.needsNaming ? '#b45309' : state.cls === 'ok' ? '#15803d' : state.cls === 'estimated' ? '#b45309' : '#b91c1c';
       ctx.font = '900 9px system-ui';
       ctx.fillText(statusText, p.x, p.y + (area ? 19 : 10));
       ctx.restore();
@@ -3395,8 +3398,10 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     }
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     var derived = walls.filter(function (w) { return w.requiresMeasureVerification; }).length;
+    var unnamedRooms = rooms.filter(function (room) { return room.needsNaming && !room.geometryMissing; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' +
-      (missing ? missing + ' da misurare' : derived ? derived + ' quote da verificare' : 'misure complete ✓');
+      (missing ? missing + ' da misurare' : derived ? derived + ' quote da verificare' : 'misure complete ✓') +
+      (unnamedRooms ? ' · ' + unnamedRooms + ' ambienti da nominare' : '');
     $('measureLabel').textContent = missing
       ? 'MISURE ' + missing
       : derived
