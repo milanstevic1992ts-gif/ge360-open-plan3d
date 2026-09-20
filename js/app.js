@@ -1032,7 +1032,8 @@ import {
       position: Math.max(.06, Math.min(.94, hit.t)),
       widthCm: mode === 'door' ? 80 : 120,
       referenceEnd: hit.t <= 0.5 ? 'a' : 'b',
-      offsetCm: null
+      offsetCm: null,
+      swingSide: mode === 'door' ? 1 : null
     };
     openings.push(opening);
     currentOpeningId = opening.id;
@@ -1801,6 +1802,7 @@ import {
       calculationWalls: calculationWalls,
       openings: clone(openings),
       rooms: clone(rooms),
+      notes: clone(notes),
       surfaces: cache,
       geometrySolved: solvedClosed,
       closure: solved.result && solved.result.closure ? clone(solved.result.closure) : null,
@@ -1913,21 +1915,12 @@ import {
     presentationModel.openings.forEach(function (opening) {
       var wall = pwalls.find(function (w) { return w.id === opening.wallId; });
       if (!wall) return;
-      var q = openingWorldPoint(opening, wall);
-      if (!q) return;
-      var p = tp(q);
-      pctx.fillStyle = opening.type === 'door' ? '#16a34a' : '#0891b2';
-      pctx.strokeStyle = '#ffffff';
-      pctx.lineWidth = 3;
-      pctx.beginPath();
-      pctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-      pctx.fill();
-      pctx.stroke();
-      pctx.fillStyle = '#ffffff';
-      pctx.font = '900 8px system-ui';
-      pctx.textAlign = 'center';
-      pctx.textBaseline = 'middle';
-      pctx.fillText(opening.type === 'door' ? 'P' : 'F', p.x, p.y + .5);
+      drawOpeningSymbol(pctx, opening, wall, tp, {
+        wallWidth: 6,
+        background: '#ffffff',
+        showLabel: true,
+        compact: true
+      });
     });
 
     var metricByRoom = new Map();
@@ -1966,6 +1959,12 @@ import {
         pctx.font = '900 11px system-ui';
         pctx.fillText(area, p.x, p.y + 9);
       }
+    });
+
+    (presentationModel.notes || []).forEach(function (note) {
+      var anchor = noteAnchorForGeometry(note, pwalls, presentationModel.openings, presentationModel.rooms, displayFaces);
+      if (!anchor) return;
+      drawInterventionAnnotation(pctx, note, tp(anchor), { compact:true });
     });
   }
 
@@ -2257,15 +2256,19 @@ import {
     ctx.restore();
   }
 
-  function roundRect(x, y, w, h, r) {
+  function roundRectPath(gctx, x, y, w, h, r) {
     var rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
+    gctx.beginPath();
+    gctx.moveTo(x + rr, y);
+    gctx.arcTo(x + w, y, x + w, y + h, rr);
+    gctx.arcTo(x + w, y + h, x, y + h, rr);
+    gctx.arcTo(x, y + h, x, y, rr);
+    gctx.arcTo(x, y, x + w, y, rr);
+    gctx.closePath();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    roundRectPath(ctx, x, y, w, h, r);
   }
 
   function drawMeasure(wall) {
@@ -2289,30 +2292,120 @@ import {
     ctx.restore();
   }
 
+  function wallPointAt(wall, t) {
+    return {
+      x: wall.a.x + (wall.b.x - wall.a.x) * t,
+      y: wall.a.y + (wall.b.y - wall.a.y) * t
+    };
+  }
+
+  function drawOpeningSymbol(gctx, opening, wall, transform, options) {
+    options = options || {};
+    var interval = openingInterval(opening, wall);
+    if (!interval) return;
+
+    var a = transform(wallPointAt(wall, interval.startT));
+    var b = transform(wallPointAt(wall, interval.endT));
+    var dx = b.x - a.x;
+    var dy = b.y - a.y;
+    var gapPx = Math.hypot(dx, dy);
+    if (!Number.isFinite(gapPx) || gapPx < 3) return;
+
+    var ux = dx / gapPx;
+    var uy = dy / gapPx;
+    var nx = -uy;
+    var ny = ux;
+    var wallWidth = options.wallWidth || 8;
+    var bg = options.background || '#f8fafc';
+    var color = opening.type === 'door' ? '#16a34a' : '#0891b2';
+    var side = opening.swingSide === -1 ? -1 : 1;
+
+    gctx.save();
+
+    // Cancella davvero il tratto di muro: la porta/finestra è un'apertura,
+    // non un bollino sovrapposto.
+    gctx.strokeStyle = bg;
+    gctx.lineWidth = wallWidth + 5;
+    gctx.lineCap = 'butt';
+    gctx.beginPath();
+    gctx.moveTo(a.x - ux * 1.5, a.y - uy * 1.5);
+    gctx.lineTo(b.x + ux * 1.5, b.y + uy * 1.5);
+    gctx.stroke();
+
+    // Spallette ai lati dell'apertura.
+    gctx.strokeStyle = '#0f172a';
+    gctx.lineWidth = 2;
+    var jamb = Math.max(4, wallWidth * .75);
+    [a, b].forEach(function (p) {
+      gctx.beginPath();
+      gctx.moveTo(p.x - nx * jamb, p.y - ny * jamb);
+      gctx.lineTo(p.x + nx * jamb, p.y + ny * jamb);
+      gctx.stroke();
+    });
+
+    if (opening.type === 'door') {
+      var hinge = a;
+      var leafEnd = {
+        x: hinge.x + nx * gapPx * side,
+        y: hinge.y + ny * gapPx * side
+      };
+      gctx.strokeStyle = color;
+      gctx.lineWidth = 2.5;
+      gctx.beginPath();
+      gctx.moveTo(hinge.x, hinge.y);
+      gctx.lineTo(leafEnd.x, leafEnd.y);
+      gctx.stroke();
+
+      var theta = Math.atan2(dy, dx);
+      gctx.globalAlpha = .72;
+      gctx.lineWidth = 1.5;
+      gctx.beginPath();
+      gctx.arc(hinge.x, hinge.y, gapPx, theta, theta + side * Math.PI / 2, side < 0);
+      gctx.stroke();
+      gctx.globalAlpha = 1;
+    } else {
+      // Simbolo finestra: due linee parallele nel vano.
+      gctx.strokeStyle = color;
+      gctx.lineWidth = 2;
+      [-3, 3].forEach(function (off) {
+        gctx.beginPath();
+        gctx.moveTo(a.x + nx * off, a.y + ny * off);
+        gctx.lineTo(b.x + nx * off, b.y + ny * off);
+        gctx.stroke();
+      });
+    }
+
+    if (options.showLabel !== false) {
+      var cx = (a.x + b.x) / 2;
+      var cy = (a.y + b.y) / 2;
+      var offset = opening.type === 'door' ? 14 * side : 15;
+      var label = (opening.type === 'door' ? 'P ' : 'F ') +
+        (Number.isFinite(opening.widthCm) ? (opening.widthCm / 100).toFixed(2).replace('.', ',') : '');
+      gctx.font = '900 ' + (options.compact ? 8 : 9) + 'px system-ui';
+      gctx.textAlign = 'center';
+      gctx.textBaseline = 'middle';
+      var tw = gctx.measureText(label).width + 8;
+      var lx = cx + nx * offset;
+      var ly = cy + ny * offset;
+      gctx.fillStyle = 'rgba(255,255,255,.95)';
+      roundRectPath(gctx, lx - tw / 2, ly - 8, tw, 16, 6);
+      gctx.fill();
+      gctx.fillStyle = color;
+      gctx.fillText(label, lx, ly + .5);
+    }
+
+    gctx.restore();
+  }
+
   function drawOpening(opening) {
     var wall = walls.find(function (w) { return w.id === opening.wallId; });
     if (!wall) return;
-    var wp = {
-      x: wall.a.x + (wall.b.x - wall.a.x) * opening.position,
-      y: wall.a.y + (wall.b.y - wall.a.y) * opening.position
-    };
-    var openingScreen = worldToScreen(wp);
-    var x = openingScreen.x;
-    var y = openingScreen.y;
-    ctx.save();
-    ctx.fillStyle = opening.type === 'door' ? '#22c55e' : '#06b6d4';
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(x, y, 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = '900 12px system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(opening.type === 'door' ? 'P' : 'F', x, y + 1);
-    ctx.restore();
+
+    drawOpeningSymbol(ctx, opening, wall, worldToScreen, {
+      wallWidth: wall.id === selectedWallId ? 10 : 8,
+      background: '#f8fafc',
+      showLabel: true
+    });
 
     if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
       var cornerWorld = opening.referenceEnd === 'b' ? wall.b : wall.a;
@@ -2335,52 +2428,129 @@ import {
     }
   }
 
-  function noteAnchor(note) {
+  function noteAnchorForGeometry(note, wallList, openingList, roomList, faces) {
     if (!note) return null;
 
     if (note.targetType === 'wall') {
-      var wall = walls.find(function (w) { return w.id === note.targetId; });
+      var wall = (wallList || []).find(function (w) { return w.id === note.targetId; });
       if (!wall) return null;
-      return { x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 };
+      return { x:(wall.a.x + wall.b.x) / 2, y:(wall.a.y + wall.b.y) / 2 };
     }
 
     if (note.targetType === 'opening') {
-      var opening = openings.find(function (o) { return o.id === note.targetId; });
-      return opening ? openingWorldPoint(opening) : null;
+      var opening = (openingList || []).find(function (o) { return o.id === note.targetId; });
+      if (!opening) return null;
+      var ow = (wallList || []).find(function (w) { return w.id === opening.wallId; });
+      return ow ? openingWorldPoint(opening, ow) : null;
     }
 
-    var faces = buildFaces(walls);
-    var room = rooms.find(function (r) { return r.id === note.targetId; });
+    var room = (roomList || []).find(function (r) { return r.id === note.targetId; });
     var face = room
-      ? matchRoomFace(room, faces)
-      : faces.find(function (f) { return faceKey(f) === note.targetId; });
+      ? matchRoomFace(room, faces || [])
+      : (faces || []).find(function (f) { return faceKey(f) === note.targetId; });
     return face ? face.centroid : null;
   }
 
-  function drawNoteMarkers() {
-    notes.forEach(function (note) {
-      var anchor = noteAnchor(note);
-      if (!anchor) return;
-      var p = worldToScreen(anchor);
-      var oy = note.targetType === 'floor' ? 24 : note.targetType === 'ceiling' ? -24 : 0;
-      var ox = note.targetType === 'room' ? 26 : note.targetType === 'wall' ? 18 : 0;
-      p.x += ox;
-      p.y += oy;
+  function noteAnchor(note) {
+    return noteAnchorForGeometry(note, walls, openings, rooms, buildFaces(walls));
+  }
 
-      ctx.save();
-      ctx.fillStyle = '#f59e0b';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '1000 8px system-ui';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('N', p.x, p.y + .5);
-      ctx.restore();
+  function interventionColor(note) {
+    var first = normalizeWorkItems(note && note.workItems)[0];
+    var category = first ? first.category : 'general';
+    if (category === 'demolition') return '#dc2626';
+    if (category === 'construction') return '#2563eb';
+    if (category === 'finish') return '#d97706';
+    return '#7c3aed';
+  }
+
+  function interventionText(note) {
+    var items = normalizeWorkItems(note && note.workItems);
+    if (items.length) return items.map(function (x) { return x.label; }).join(' · ');
+    return String((note && (note.cleanedText || note.rawText)) || 'INTERVENTO').trim();
+  }
+
+  function wrapAnnotationText(gctx, text, maxWidth, maxLines) {
+    var words = String(text || '').split(/\s+/).filter(Boolean);
+    var lines = [];
+    var line = '';
+    words.forEach(function (word) {
+      if (lines.length >= maxLines) return;
+      var next = line ? line + ' ' + word : word;
+      if (line && gctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+    });
+    if (line && lines.length < maxLines) lines.push(line);
+    if (words.length && lines.length === maxLines) {
+      var joined = lines.join(' ');
+      if (joined.length < text.length) lines[maxLines - 1] = lines[maxLines - 1].replace(/[.…]*$/, '') + '…';
+    }
+    return lines.length ? lines : ['INTERVENTO'];
+  }
+
+  function drawInterventionAnnotation(gctx, note, anchorScreen, options) {
+    options = options || {};
+    var style = noteDisplayStyle(note && note.displayStyle);
+    var color = interventionColor(note);
+    var text = interventionText(note);
+    var compact = !!options.compact;
+    var fontSize = compact ? 8 : 9;
+    var maxWidth = compact ? 116 : 150;
+    var maxLines = compact ? 2 : 3;
+    var offsetX = note.targetType === 'wall' || note.targetType === 'opening' ? 34 : 0;
+    var offsetY = note.targetType === 'ceiling' ? -38 : note.targetType === 'floor' ? 34 : -30;
+    var labelX = anchorScreen.x + offsetX;
+    var labelY = anchorScreen.y + offsetY;
+
+    gctx.save();
+    gctx.font = '900 ' + fontSize + 'px system-ui';
+    var lines = wrapAnnotationText(gctx, text.toUpperCase(), maxWidth, maxLines);
+    var lineH = compact ? 11 : 12;
+    var textW = Math.min(maxWidth, Math.max.apply(Math, lines.map(function (line) { return gctx.measureText(line).width; })));
+    var boxW = textW + (compact ? 10 : 14);
+    var boxH = lines.length * lineH + (compact ? 8 : 12);
+
+    if (style === 'callout') {
+      gctx.strokeStyle = color;
+      gctx.lineWidth = compact ? 1.2 : 1.6;
+      gctx.beginPath();
+      gctx.moveTo(anchorScreen.x, anchorScreen.y);
+      gctx.lineTo(labelX, labelY);
+      gctx.stroke();
+
+      gctx.fillStyle = color;
+      gctx.beginPath();
+      gctx.arc(anchorScreen.x, anchorScreen.y, compact ? 2.5 : 3.5, 0, Math.PI * 2);
+      gctx.fill();
+    }
+
+    gctx.fillStyle = style === 'text' ? 'rgba(255,255,255,.80)' : 'rgba(255,255,255,.96)';
+    gctx.strokeStyle = color;
+    gctx.lineWidth = style === 'text' ? 1 : 1.5;
+    roundRectPath(gctx, labelX - boxW / 2, labelY - boxH / 2, boxW, boxH, compact ? 5 : 7);
+    gctx.fill();
+    gctx.stroke();
+
+    gctx.fillStyle = color;
+    gctx.textAlign = 'center';
+    gctx.textBaseline = 'middle';
+    lines.forEach(function (line, i) {
+      var yy = labelY + (i - (lines.length - 1) / 2) * lineH;
+      gctx.fillText(line, labelX, yy);
+    });
+    gctx.restore();
+  }
+
+  function drawNoteMarkers() {
+    var faces = buildFaces(walls);
+    notes.forEach(function (note) {
+      var anchor = noteAnchorForGeometry(note, walls, openings, rooms, faces);
+      if (!anchor) return;
+      drawInterventionAnnotation(ctx, note, worldToScreen(anchor), { compact:false });
     });
   }
 
