@@ -738,6 +738,211 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     vibrate(14);
   }
 
+  function photoTargetFromSelection() {
+    var obj = selectedObjectData();
+    if (!obj || !selectedObject) return null;
+    if (selectedObject.type === 'wall') {
+      var wi = walls.findIndex(function (w) { return w.id === obj.id; });
+      var room = roomForWall(obj.id);
+      return {
+        type:'wall',
+        id:obj.id,
+        label:'Muro ' + wallReference(wi) + (room ? ' · ' + room.name : ''),
+        roomName:room ? room.name : null
+      };
+    }
+    var oroom = roomForWall(obj.wallId);
+    return {
+      type:'opening',
+      id:obj.id,
+      label:(obj.type === 'door' ? 'Porta' : 'Finestra') + (oroom ? ' · ' + oroom.name : ''),
+      roomName:oroom ? oroom.name : null
+    };
+  }
+
+  function capturePhotoForTarget(target) {
+    if (!target || !activePlanId) return;
+    pendingPhotoTarget = {
+      type:String(target.type || 'plan'),
+      id:String(target.id || activePlanId),
+      label:String(target.label || 'Rilievo'),
+      roomName:target.roomName || null
+    };
+    $('photoInput').value = '';
+    $('photoInput').click();
+  }
+
+  async function handlePhotoInput() {
+    var file = $('photoInput').files && $('photoInput').files[0];
+    if (!file || !pendingPhotoTarget || !activePlanId) return;
+    var target = pendingPhotoTarget;
+    pendingPhotoTarget = null;
+
+    try {
+      toast('Salvataggio foto…');
+      var blob = await compressPhoto(file, 1920, .82);
+      var id = uid('photo');
+      var meta = await savePhoto({
+        id:id,
+        planId:activePlanId,
+        targetType:target.type,
+        targetId:target.id,
+        targetLabel:target.label,
+        roomName:target.roomName,
+        name:file.name || 'foto.jpg',
+        mime:blob.type || file.type || 'image/jpeg',
+        blob:blob,
+        createdAt:new Date().toISOString()
+      });
+      photoRefs.push(meta);
+      persistActive();
+      updateUI();
+      if (!$('roomBackdrop').classList.contains('hidden') && pendingRoomId) {
+        var count = photoCountForTarget('room', pendingRoomId);
+        $('roomPhotoCount').textContent = count + ' foto';
+      }
+      vibrate(24);
+      toast('Foto collegata ✓');
+    } catch (e) {
+      toast('Foto non salvata · ' + (e.message || 'errore archivio'));
+    }
+  }
+
+  function closePhotosGallery() {
+    $('photosBackdrop').classList.add('hidden');
+    photoObjectUrls.forEach(function (url) {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    });
+    photoObjectUrls = [];
+    $('photoGallery').innerHTML = '';
+  }
+
+  async function renderPhotoGallery() {
+    var gallery = $('photoGallery');
+    gallery.innerHTML = '';
+    photoObjectUrls.forEach(function (url) {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    });
+    photoObjectUrls = [];
+
+    var refs = photoRefs.slice().sort(function (a,b) {
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    $('photoGallerySummary').textContent = refs.length
+      ? refs.length + (refs.length === 1 ? ' foto collegata al rilievo' : ' foto collegate al rilievo')
+      : 'Nessuna foto ancora';
+
+    if (!refs.length) {
+      var empty = document.createElement('div');
+      empty.className = 'photo-empty';
+      empty.textContent = 'Scatta una foto da un muro, da una porta/finestra o da un ambiente.';
+      gallery.appendChild(empty);
+      return;
+    }
+
+    for (const ref of refs) {
+      var card = document.createElement('article');
+      card.className = 'photo-card';
+
+      var media = document.createElement('div');
+      media.className = 'photo-thumb-wrap';
+      var img = document.createElement('img');
+      img.className = 'photo-thumb';
+      img.alt = ref.targetLabel || 'Foto rilievo';
+      media.appendChild(img);
+      card.appendChild(media);
+
+      try {
+        var record = await getPhoto(ref.id);
+        if (record && record.blob) {
+          var url = URL.createObjectURL(record.blob);
+          photoObjectUrls.push(url);
+          img.src = url;
+        } else {
+          media.classList.add('missing');
+          media.textContent = 'FOTO NON DISPONIBILE';
+        }
+      } catch (_) {
+        media.classList.add('missing');
+        media.textContent = 'FOTO NON DISPONIBILE';
+      }
+
+      var info = document.createElement('div');
+      info.className = 'photo-card-info';
+      var title = document.createElement('b');
+      title.textContent = ref.targetLabel || 'Rilievo';
+      var meta = document.createElement('span');
+      var d = ref.createdAt ? new Date(ref.createdAt).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+      meta.textContent = (ref.roomName ? ref.roomName + ' · ' : '') + d + (ref.orphaned ? ' · SCOLLEGATA' : '');
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'photo-delete';
+      del.textContent = '🗑';
+      del.addEventListener('click', async function () {
+        if (!confirm('Eliminare questa foto dal rilievo e dal dispositivo?')) return;
+        try { await deletePhoto(ref.id); } catch (_) {}
+        photoRefs = photoRefs.filter(function (p) { return p.id !== ref.id; });
+        persistActive();
+        await renderPhotoGallery();
+        updateUI();
+        toast('Foto eliminata');
+      });
+
+      info.appendChild(del);
+      card.appendChild(info);
+      gallery.appendChild(card);
+    }
+  }
+
+  async function openPhotosGallery() {
+    closeTools();
+    $('photosBackdrop').classList.remove('hidden');
+    try {
+      var stored = await listPlanPhotos(activePlanId);
+      var known = new Set(photoRefs.map(function (p) { return p.id; }));
+      stored.forEach(function (record) {
+        if (known.has(record.id)) return;
+        photoRefs.push({
+          id:record.id,
+          targetType:record.targetType || 'plan',
+          targetId:record.targetId || '',
+          targetLabel:record.targetLabel || 'Rilievo',
+          roomName:record.roomName || null,
+          caption:record.caption || '',
+          name:record.name || 'foto.jpg',
+          mime:record.mime || 'image/jpeg',
+          size:record.size || 0,
+          createdAt:record.createdAt || null,
+          localOnly:true
+        });
+      });
+      persistActive();
+    } catch (_) {}
+    await renderPhotoGallery();
+  }
+
+  function captureSelectedObjectPhoto() {
+    var target = photoTargetFromSelection();
+    if (!target) return hideObjectActionBar();
+    hideObjectActionBar();
+    capturePhotoForTarget(target);
+  }
+
+  function captureCurrentRoomPhoto() {
+    if (!pendingRoomId) return toast('Prima salva o seleziona l’ambiente');
+    var room = rooms.find(function (r) { return r.id === pendingRoomId; });
+    if (!room) return toast('Ambiente non disponibile');
+    capturePhotoForTarget({
+      type:'room',
+      id:room.id,
+      label:room.name || 'Ambiente',
+      roomName:room.name || null
+    });
+  }
+
   function directInterventionSelected() {
     var obj = selectedObjectData();
     if (!obj) return hideObjectActionBar();
@@ -908,6 +1113,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     var label = opening.type === 'door' ? 'porta' : 'finestra';
     if (!confirm('Eliminare questa ' + label + '?')) return;
     checkpoint();
+    orphanPhotosForTarget('opening', opening.id, opening.type === 'door' ? 'Porta eliminata' : 'Finestra eliminata');
     openings = openings.filter(function (o) { return o.id !== opening.id; });
     notes = notes.filter(function (n) {
       return !(n.targetType === 'opening' && n.targetId === opening.id);
@@ -3046,6 +3252,76 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
+  function renderTakeoff() {
+    var cache = surfaceCache || refreshSurfaceCache();
+    var takeoff = buildProgressiveTakeoff({
+      notes:notes,
+      walls:walls,
+      openings:openings,
+      rooms:rooms,
+      surfaceCache:cache,
+      wallHeightM:wallHeightM
+    });
+
+    var summaryEl = $('takeoffSummary');
+    summaryEl.innerHTML =
+      '<b>' + takeoff.rows.length + ' lavorazioni quantificate</b>' +
+      '<span>' + takeoff.totals.interventions + ' interventi strutturati' +
+      (takeoff.unresolved.length ? ' · ' + takeoff.unresolved.length + ' da completare' : '') + '</span>';
+
+    var rowsEl = $('takeoffRows');
+    rowsEl.innerHTML = '';
+    takeoff.rows.forEach(function (row) {
+      var item = document.createElement('div');
+      item.className = 'takeoff-row ' + row.category;
+      var left = document.createElement('div');
+      left.className = 'takeoff-row-main';
+      var title = document.createElement('b');
+      title.textContent = row.label;
+      var detail = document.createElement('span');
+      var roomsText = row.rooms && row.rooms.length ? row.rooms.join(', ') : row.targets + ' elementi';
+      detail.textContent = roomsText;
+      left.appendChild(title);
+      left.appendChild(detail);
+      var value = document.createElement('div');
+      value.className = 'takeoff-value';
+      value.textContent = (row.estimated ? '≈ ' : '') +
+        (row.unit === 'cad' ? String(row.value) : row.value.toFixed(2).replace('.', ',')) +
+        ' ' + row.unit;
+      item.appendChild(left);
+      item.appendChild(value);
+      rowsEl.appendChild(item);
+    });
+
+    var unresolvedEl = $('takeoffUnresolved');
+    unresolvedEl.innerHTML = '';
+    unresolvedEl.classList.toggle('hidden', !takeoff.unresolved.length);
+    if (takeoff.unresolved.length) {
+      var head = document.createElement('b');
+      head.textContent = 'DA COMPLETARE';
+      unresolvedEl.appendChild(head);
+      takeoff.unresolved.slice(0,12).forEach(function (u) {
+        var row = document.createElement('div');
+        row.textContent = '• ' + u.label + (u.targetLabel ? ' · ' + u.targetLabel : '');
+        unresolvedEl.appendChild(row);
+      });
+    }
+
+    var plan = currentPlan();
+    if (plan) plan.takeoff = clone(takeoff);
+    return takeoff;
+  }
+
+  function openTakeoff() {
+    closeTools();
+    renderTakeoff();
+    $('takeoffBackdrop').classList.remove('hidden');
+  }
+
+  function closeTakeoff() {
+    $('takeoffBackdrop').classList.add('hidden');
+  }
+
   function openTools() {
     if (!walls.length) return toast('Prima disegna la pianta');
     cancelPickModes();
@@ -3103,8 +3379,20 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
     $('notesBtn').classList.toggle('hidden', !has);
+    $('photosBtn').classList.toggle('hidden', !has);
+    $('takeoffBtn').classList.toggle('hidden', !has);
     var notesTitle = $('notesBtn').querySelector('b');
     if (notesTitle) notesTitle.textContent = 'INTERVENTI' + (notes.length ? ' · ' + notes.length : '');
+    var photosTitle = $('photosBtn').querySelector('b');
+    if (photosTitle) photosTitle.textContent = 'FOTO' + (photoRefs.length ? ' · ' + photoRefs.length : '');
+    var takeoffTitle = $('takeoffBtn').querySelector('b');
+    if (takeoffTitle) {
+      var takeoffNow = buildProgressiveTakeoff({
+        notes:notes,walls:walls,openings:openings,rooms:rooms,
+        surfaceCache:surfaceCache,wallHeightM:wallHeightM
+      });
+      takeoffTitle.textContent = 'COMPUTO LIVE' + (takeoffNow.rows.length ? ' · ' + takeoffNow.rows.length : '');
+    }
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     var derived = walls.filter(function (w) { return w.requiresMeasureVerification; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' +
@@ -3846,6 +4134,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
   $('objectMeasureBtn').addEventListener('click', measureSelectedObject);
   $('objectMoveBtn').addEventListener('click', moveSelectedObject);
   $('objectWorkBtn').addEventListener('click', directInterventionSelected);
+  $('objectPhotoBtn').addEventListener('click', captureSelectedObjectPhoto);
   $('objectSwingBtn').addEventListener('click', swingSelectedDoor);
   $('objectDeleteBtn').addEventListener('click', deleteSelectedObject);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
@@ -3886,6 +4175,14 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     runTool(openRoomPicker);
   });
   $('surfacesBtn').addEventListener('click', function () { runTool(openSurfaces); });
+  $('photosBtn').addEventListener('click', openPhotosGallery);
+  $('takeoffBtn').addEventListener('click', openTakeoff);
+  $('closePhotosBtn').addEventListener('click', closePhotosGallery);
+  $('photosBackdrop').addEventListener('click', function (e) { if (e.target === $('photosBackdrop')) closePhotosGallery(); });
+  $('photoInput').addEventListener('change', handlePhotoInput);
+  $('roomPhotoBtn').addEventListener('click', captureCurrentRoomPhoto);
+  $('closeTakeoffBtn').addEventListener('click', closeTakeoff);
+  $('takeoffBackdrop').addEventListener('click', function (e) { if (e.target === $('takeoffBackdrop')) closeTakeoff(); });
   $('presentBtn').addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
