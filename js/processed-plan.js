@@ -189,8 +189,8 @@ function normalizeSummary(source = {}) {
   const rooms = source.rooms ?? source.roomCount ?? source.room_count ?? null;
   const area = source.floorAreaM2 ?? source.floor_area_m2 ?? source.areaM2 ?? source.area_m2 ?? null;
   return {
-    rooms: Number.isFinite(Number(rooms)) ? Number(rooms) : null,
-    floorAreaM2: Number.isFinite(Number(area)) ? Number(area) : null
+    rooms: rooms != null && rooms !== '' && Number.isFinite(Number(rooms)) ? Number(rooms) : null,
+    floorAreaM2: area != null && area !== '' && Number.isFinite(Number(area)) ? Number(area) : null
   };
 }
 
