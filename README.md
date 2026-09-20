@@ -25,6 +25,8 @@ Il telefono non è un CAD e non sostituisce un rilievo professionale.
 - superfici indicative con stati `OK`, `STIMATO`, `DA VERIFICARE`;
 - modalità `SISTEMA PIANTA`;
 - modalità `PRESENTA`;
+- appunti collegati a ambiente, pavimento, soffitto, muro e aperture;
+- riscrittura appunti tramite LLM locale sul Debian/Ollama;
 - esportazione JSON;
 - bridge Debian opzionale.
 
