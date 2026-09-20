@@ -44,3 +44,14 @@ Il prossimo passo è collegare qui un solver geometrico/planner che:
 - raddrizza parallelismi e angoli;
 - segnala misure incompatibili invece di modificarle di nascosto;
 - restituisce planimetria pulita JSON/SVG/DXF/PDF.
+
+
+## Payload v4
+
+Il bridge conserva anche i dati frontend introdotti nella versione 4:
+
+- `rooms`
+- `wallHeightM`
+- `surfaces`
+
+In questo modo l'invio al Debian non perde nomi ambiente o riepiloghi superfici.
