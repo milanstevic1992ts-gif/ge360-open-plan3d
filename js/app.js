@@ -1,4 +1,5 @@
 import { solveFloorPlan } from '../geometry-engine/index.js';
+import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
 
 (function () {
   'use strict';
@@ -33,6 +34,13 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
   var solverMode = 'normal';
   var solverResult = null;
   var solverOriginal = null;
+  var rooms = [];
+  var wallHeightM = 2.70;
+  var roomPickMode = false;
+  var pendingRoomFace = null;
+  var pendingRoomId = null;
+  var selectedRoomName = '';
+  var surfaceCache = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -82,7 +90,9 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       walls: ws.length,
       missing: ws.filter(function (w) { return !w.lengthCm; }).length,
       doors: os.filter(function (o) { return o.type === 'door'; }).length,
-      windows: os.filter(function (o) { return o.type === 'window'; }).length
+      windows: os.filter(function (o) { return o.type === 'window'; }).length,
+      rooms: plan ? (plan.rooms || []).length : rooms.length,
+      floorM2: plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null
     };
   }
 
@@ -94,7 +104,10 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     plan.rawStrokes = clone(rawStrokes);
     plan.walls = clone(walls);
     plan.openings = clone(openings);
+    plan.rooms = clone(rooms);
+    plan.wallHeightM = wallHeightM;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
+    if (surfaceCache && surfaceCache.totals) plan.surfaceSummary = clone(surfaceCache.totals);
     plan.summary = summary();
     saveLibrary();
     if (showToast) toast('Salvato ✓');
@@ -124,6 +137,8 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       rawStrokes: [],
       walls: [],
       openings: [],
+      rooms: [],
+      wallHeightM: 2.70,
       view: { zoom: 1, rotation: 0 }
     };
     library.unshift(plan);
@@ -138,6 +153,10 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     rawStrokes = clone(plan.rawStrokes || []);
     walls = clone(plan.walls || []);
     openings = clone(plan.openings || []);
+    rooms = clone(plan.rooms || []);
+    wallHeightM = Number.isFinite(plan.wallHeightM) && plan.wallHeightM > 0 ? plan.wallHeightM : 2.70;
+    surfaceCache = null;
+    roomPickMode = false;
     viewZoom = plan.view && Number.isFinite(plan.view.zoom) ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, plan.view.zoom)) : 1;
     viewRotation = plan.view && Number.isFinite(plan.view.rotation) ? ((plan.view.rotation % 360) + 360) % 360 : 0;
     history = [];
@@ -192,7 +211,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       h3.textContent = plan.name || 'Rilievo';
       var meta = document.createElement('div');
       meta.className = 'plan-meta';
-      meta.textContent = s.walls + ' muri · ' + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
+      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m² · ' : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
 
       var actions = document.createElement('div');
       actions.className = 'plan-actions';
@@ -248,7 +267,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
   }
 
   function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings }));
+    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, wallHeightM: wallHeightM }));
     if (history.length > 30) history.shift();
   }
 
@@ -258,6 +277,9 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     rawStrokes = data.rawStrokes || [];
     walls = data.walls || [];
     openings = data.openings || [];
+    rooms = data.rooms || [];
+    wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
+    surfaceCache = null;
     closeSheet();
     persistActive();
     updateUI();
@@ -402,6 +424,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       wallIds: []
     };
     rawStrokes.push(stroke);
+    surfaceCache = null;
 
     for (var i = 1; i < simp.length; i++) {
       if (dist(simp[i - 1], simp[i]) < 24 / viewZoom) continue;
@@ -553,6 +576,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       checkpoint();
       var wall = walls.find(function (w) { return w.id === selectedWallId; });
       if (wall) wall.lengthCm = Math.round(meters * 100);
+      surfaceCache = null;
       var strokeId = wall ? wall.strokeId : null;
       var next = walls.find(function (w) { return w.strokeId === strokeId && !w.lengthCm && w.id !== selectedWallId; });
       if (!next) next = walls.find(function (w) { return !w.lengthCm && w.id !== selectedWallId; });
@@ -570,6 +594,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       checkpoint();
       var op = openings.find(function (o) { return o.id === currentOpeningId; });
       if (op) op.widthCm = Math.round(meters * 100);
+      surfaceCache = null;
       persistActive();
       numberText = '';
       openSheet('opening-offset');
@@ -589,6 +614,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
         }
         op2.offsetCm = offsetCm;
         recalcOpeningPosition(op2);
+        surfaceCache = null;
       }
       currentOpeningId = null;
       persistActive();
@@ -618,6 +644,9 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
       rawStrokes: plan.rawStrokes || [],
       walls: plan.walls || [],
       openings: plan.openings || [],
+      rooms: plan.rooms || [],
+      wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
+      surfaces: plan.surfaceSummary || null,
       summary: summary(plan)
     };
   }
@@ -856,6 +885,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     });
 
     rawStrokes = [];
+    surfaceCache = null;
     openings.forEach(function (o) { recalcOpeningPosition(o); });
 
     var bw = Math.max(1, b.maxX - b.minX);
@@ -868,6 +898,252 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     render();
     closeSolver();
     toast('Pianta sistemata ✓');
+  }
+
+  function faceKey(face) {
+    return (face && face.wallIds ? face.wallIds.slice().sort().join('|') : '');
+  }
+
+  function openRoomPicker() {
+    if (!walls.length) return toast('Prima disegna la pianta');
+    roomPickMode = true;
+    $('roomBtn').classList.add('active');
+    toast('Tocca dentro l’ambiente');
+    vibrate(12);
+  }
+
+  function handleRoomPick(p) {
+    roomPickMode = false;
+    $('roomBtn').classList.remove('active');
+    var face = findFaceAtPoint(walls, p);
+    if (!face) {
+      toast('Non trovo un ambiente chiuso qui');
+      vibrate(60);
+      return;
+    }
+    pendingRoomFace = face;
+    var key = faceKey(face);
+    var existing = rooms.find(function (r) { return r.faceKey === key || faceKey({ wallIds: r.wallIds }) === key; });
+    pendingRoomId = existing ? existing.id : null;
+    selectedRoomName = existing ? existing.name : '';
+    $('roomCustomName').value = existing && existing.custom ? existing.name : '';
+    document.querySelectorAll('[data-room-name]').forEach(function (b) {
+      b.classList.toggle('selected', existing && existing.name === b.dataset.roomName);
+    });
+    $('roomBackdrop').classList.remove('hidden');
+  }
+
+  function closeRoomModal() {
+    $('roomBackdrop').classList.add('hidden');
+    pendingRoomFace = null;
+    pendingRoomId = null;
+    selectedRoomName = '';
+    $('roomCustomName').value = '';
+    document.querySelectorAll('[data-room-name]').forEach(function (b) { b.classList.remove('selected'); });
+  }
+
+  function selectRoomPreset(name, button) {
+    selectedRoomName = name;
+    document.querySelectorAll('[data-room-name]').forEach(function (b) { b.classList.toggle('selected', b === button); });
+    if (name === 'Altro') {
+      $('roomCustomName').focus();
+    } else {
+      $('roomCustomName').value = '';
+    }
+  }
+
+  function saveRoom() {
+    if (!pendingRoomFace) return;
+    var custom = $('roomCustomName').value.trim();
+    var name = custom || (selectedRoomName && selectedRoomName !== 'Altro' ? selectedRoomName : '');
+    if (!name) return toast('Scegli o scrivi il nome ambiente');
+
+    checkpoint();
+    var wallIds = pendingRoomFace.wallIds.slice().sort();
+    var key = wallIds.join('|');
+    var room = pendingRoomId ? rooms.find(function (r) { return r.id === pendingRoomId; }) : null;
+    if (!room) {
+      room = { id: uid('room'), name: name, wallIds: wallIds, faceKey: key, custom: !!custom };
+      rooms.push(room);
+    } else {
+      room.name = name;
+      room.wallIds = wallIds;
+      room.faceKey = key;
+      room.custom = !!custom;
+    }
+    surfaceCache = null;
+    persistActive();
+    closeRoomModal();
+    refreshSurfaceCache();
+    render();
+    toast(name + ' salvato ✓');
+  }
+
+  function parseHeightInput() {
+    var n = Number(String($('wallHeightInput').value || '').replace(',', '.'));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  function solvedPresentationWalls() {
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) return { result: null, missing: missing.length, walls: [] };
+    try {
+      var result = solveFloorPlan(solverInput(), { mode: 'normal', maxClosureGapCm: 20 });
+      var solved = (result.walls || []).filter(function (w) { return w && w.a && w.b && Number.isFinite(w.lengthCm); });
+      return { result: result, missing: 0, walls: solved };
+    } catch (e) {
+      return { result: null, missing: 0, walls: [], error: e };
+    }
+  }
+
+  function refreshSurfaceCache() {
+    var solved = solvedPresentationWalls();
+    if (solved.missing || !solved.walls.length) {
+      surfaceCache = null;
+      return null;
+    }
+    surfaceCache = calculateSurfaces(solved.walls, rooms, wallHeightM);
+    var plan = currentPlan();
+    if (plan && surfaceCache) plan.surfaceSummary = clone(surfaceCache.totals);
+    return surfaceCache;
+  }
+
+  function formatM2(v) {
+    return Number.isFinite(v) ? v.toFixed(1).replace('.', ',') + ' m²' : '—';
+  }
+
+  function totalBox(label, value) {
+    return '<div class="surface-total"><div class="k">' + label + '</div><div class="v">' + formatM2(value) + '</div></div>';
+  }
+
+  function openSurfaces() {
+    if (!walls.length) return toast('Prima disegna la pianta');
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) {
+      toast('Mancano ' + missing.length + ' misure');
+      return openNextMissing(missing[0].id);
+    }
+    $('wallHeightInput').value = wallHeightM.toFixed(2).replace('.', ',');
+    $('surfacesBackdrop').classList.remove('hidden');
+    renderSurfaceSummary();
+  }
+
+  function closeSurfaces() {
+    $('surfacesBackdrop').classList.add('hidden');
+  }
+
+  function renderSurfaceSummary() {
+    var cache = refreshSurfaceCache();
+    var totalsEl = $('surfaceTotals');
+    var roomsEl = $('surfaceRooms');
+    totalsEl.innerHTML = '';
+    roomsEl.innerHTML = '';
+
+    if (!cache || !cache.faces.length) {
+      totalsEl.innerHTML = '<div class="surface-total" style="grid-column:1/-1"><div class="k">SUPERFICI</div><div class="v">—</div><div style="font-size:12px;color:#64748b;margin-top:5px">Chiudi almeno un ambiente per calcolare i m².</div></div>';
+      return;
+    }
+
+    totalsEl.innerHTML =
+      totalBox('PAVIMENTO', cache.totals.floorM2) +
+      totalBox('SOFFITTO', cache.totals.ceilingM2) +
+      totalBox('PARETI LORDE', cache.totals.wallsM2) +
+      totalBox('PARETI + SOFFITTO', cache.totals.wallsCeilingM2);
+
+    if (!rooms.length) {
+      roomsEl.innerHTML = '<div class="surface-room"><h3>Ambienti non nominati</h3><div style="font-size:12px;color:#64748b">Usa il pulsante AMBIENTE e tocca dentro ogni stanza per darle un nome.</div></div>';
+      return;
+    }
+
+    cache.roomMetrics.forEach(function (m) {
+      var card = document.createElement('div');
+      card.className = 'surface-room';
+      var title = document.createElement('h3');
+      title.textContent = m.room.name;
+      card.appendChild(title);
+      var grid = document.createElement('div');
+      grid.className = 'surface-room-grid';
+      grid.innerHTML =
+        '<div>Pavimento<b>' + formatM2(m.floorM2) + '</b></div>' +
+        '<div>Soffitto<b>' + formatM2(m.ceilingM2) + '</b></div>' +
+        '<div>Pareti lorde<b>' + formatM2(m.wallsM2) + '</b></div>' +
+        '<div>Pareti + soffitto<b>' + formatM2(m.wallsCeilingM2) + '</b></div>';
+      card.appendChild(grid);
+      roomsEl.appendChild(card);
+    });
+    persistActive();
+  }
+
+  function changeWallHeight() {
+    var h = parseHeightInput();
+    if (!h) return;
+    wallHeightM = h;
+    surfaceCache = null;
+    persistActive();
+    renderSurfaceSummary();
+    render();
+  }
+
+  function drawRoomAreas() {
+    if (!rooms.length) return;
+    var faces = buildFaces(walls);
+    var palette = ['rgba(37,99,235,.055)','rgba(16,185,129,.055)','rgba(245,158,11,.055)','rgba(124,58,237,.05)'];
+    rooms.forEach(function (room, idx) {
+      var face = matchRoomFace(room, faces);
+      if (!face || !face.polygon || face.polygon.length < 3) return;
+      ctx.save();
+      ctx.fillStyle = palette[idx % palette.length];
+      ctx.beginPath();
+      face.polygon.forEach(function (p, i) {
+        var sp = worldToScreen(p);
+        if (i === 0) ctx.moveTo(sp.x, sp.y); else ctx.lineTo(sp.x, sp.y);
+      });
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  function drawRoomLabels() {
+    if (!rooms.length) return;
+    var faces = buildFaces(walls);
+    var byRoom = new Map();
+    if (surfaceCache && surfaceCache.roomMetrics) {
+      surfaceCache.roomMetrics.forEach(function (m) { byRoom.set(m.room.id, m); });
+    }
+    rooms.forEach(function (room) {
+      var face = matchRoomFace(room, faces);
+      if (!face) return;
+      var p = worldToScreen(face.centroid);
+      var metric = byRoom.get(room.id);
+      var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
+      var title = String(room.name || 'Ambiente').toUpperCase();
+
+      ctx.save();
+      ctx.font = '1000 12px system-ui';
+      var w1 = ctx.measureText(title).width;
+      ctx.font = '800 11px system-ui';
+      var w2 = area ? ctx.measureText(area).width : 0;
+      var boxW = Math.max(w1, w2) + 20;
+      var boxH = area ? 43 : 28;
+      ctx.fillStyle = 'rgba(255,255,255,.94)';
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1.5;
+      roundRect(p.x - boxW / 2, p.y - boxH / 2, boxW, boxH, 11);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#0f172a';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '1000 12px system-ui';
+      ctx.fillText(title, p.x, p.y - (area ? 7 : 0));
+      if (area) {
+        ctx.fillStyle = '#2563eb';
+        ctx.font = '800 11px system-ui';
+        ctx.fillText(area, p.x, p.y + 10);
+      }
+      ctx.restore();
+    });
   }
 
   function openSettings() {
@@ -957,6 +1233,8 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     rawStrokes = [];
     walls = [];
     openings = [];
+    rooms = [];
+    surfaceCache = null;
     persistActive();
     updateUI();
     render();
@@ -968,6 +1246,8 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     $('statusPill').classList.toggle('hidden', !has);
     $('clearBtn').classList.toggle('hidden', !has);
     $('solvePlanBtn').classList.toggle('hidden', !has);
+    $('roomBtn').classList.toggle('hidden', !has);
+    $('surfacesBtn').classList.toggle('hidden', !has);
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
     $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
@@ -1077,6 +1357,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, w, h);
 
+    drawRoomAreas();
     rawStrokes.forEach(function (s) { drawPolyline(s.raw, '#cbd5e1', 3); });
     walls.forEach(function (wall) {
       ctx.save();
@@ -1093,6 +1374,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     });
     walls.forEach(drawMeasure);
     openings.forEach(drawOpening);
+    drawRoomLabels();
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
   }
 
@@ -1108,6 +1390,10 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
   canvas.addEventListener('pointerdown', function (e) {
     e.preventDefault();
     var p = point(e);
+    if (roomPickMode) {
+      handleRoomPick(p);
+      return;
+    }
     if (mode === 'draw') {
       activePointerId = e.pointerId;
       if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
@@ -1157,6 +1443,8 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
+  $('roomBtn').addEventListener('click', openRoomPicker);
+  $('surfacesBtn').addEventListener('click', openSurfaces);
   $('solvePlanBtn').addEventListener('click', openSolver);
   $('closeSolverBtn').addEventListener('click', closeSolver);
   $('cancelSolverBtn').addEventListener('click', closeSolver);
@@ -1165,6 +1453,15 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
     b.addEventListener('click', function () { runSolver(b.dataset.solverMode); });
   });
   $('solveBackdrop').addEventListener('click', function (e) { if (e.target === $('solveBackdrop')) closeSolver(); });
+  $('closeRoomBtn').addEventListener('click', closeRoomModal);
+  $('saveRoomBtn').addEventListener('click', saveRoom);
+  $('roomBackdrop').addEventListener('click', function (e) { if (e.target === $('roomBackdrop')) closeRoomModal(); });
+  document.querySelectorAll('[data-room-name]').forEach(function (b) {
+    b.addEventListener('click', function () { selectRoomPreset(b.dataset.roomName, b); });
+  });
+  $('closeSurfacesBtn').addEventListener('click', closeSurfaces);
+  $('surfacesBackdrop').addEventListener('click', function (e) { if (e.target === $('surfacesBackdrop')) closeSurfaces(); });
+  $('wallHeightInput').addEventListener('change', changeWallHeight);
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
