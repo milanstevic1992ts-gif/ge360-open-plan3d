@@ -280,7 +280,7 @@
 
   function keypad(key) {
     vibrate(7);
-    if (key === '⌫’) numberText = numberText.slice(0, -1);
+    if (key === '⌫') numberText = numberText.slice(0, -1);
     else if (key === ',') {
       if (!numberText.includes(',')) numberText += numberText ? ',' : '0,';
     } else if (numberText.length < 6) numberText += key;
