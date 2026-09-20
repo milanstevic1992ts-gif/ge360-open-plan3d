@@ -122,3 +122,100 @@ Finché la repository backend resta bootstrap non sono verificabili end-to-end:
 9. autorizzazione file con `X-GE360-API-Key`.
 
 Il vecchio bridge presente nella repository frontend espone ancora `/api/v1/plans/refine` e `/api/v1/notes/rewrite`; non è il nuovo contratto GE360 Rilievi.
+
+
+## Aperture architettoniche e interventi
+
+Il payload frontend usa `metadata.schemaVersion: 2` e dichiara le feature:
+
+- `architectural-openings`
+- `structured-interventions`
+
+### Porte e finestre
+
+Ogni elemento di `openings` resta ancorato al muro tramite dati metrici:
+
+```json
+{
+  "id": "d-1",
+  "type": "door",
+  "wallId": "w-3",
+  "widthCm": 80,
+  "offsetCm": 42,
+  "referenceEnd": "a",
+  "position": 0.31,
+  "swingSide": 1
+}
+```
+
+Il backend deve trattare porte e finestre come **vuoti reali nel muro**, non come
+marker sovrapposti. Nei file SVG/PDF/DXF la linea del muro va interrotta per la
+larghezza dell'apertura. Per le porte il frontend supporta il simbolo anta +
+arco di apertura; per le finestre il simbolo a linee parallele.
+
+`widthCm`, `offsetCm` e `referenceEnd` sono autoritativi quando disponibili.
+`position` resta un fallback/aiuto visuale.
+
+### Interventi di cantiere
+
+Per compatibilità il payload continua a inviare `notes`, ma invia anche
+`interventions`. Al momento entrambi contengono gli stessi record; il backend
+deve preferire `interventions` quando presente.
+
+Esempio:
+
+```json
+{
+  "id": "note-1",
+  "kind": "intervention",
+  "targetType": "floor",
+  "targetId": "room-2",
+  "targetLabel": "Pavimento · Bagno",
+  "roomName": "Bagno",
+  "displayStyle": "callout",
+  "workItems": [
+    {
+      "code": "floor_demolish",
+      "label": "DEMOLIRE PAVIMENTO",
+      "category": "demolition"
+    },
+    {
+      "code": "floor_tile",
+      "label": "POSA PIASTRELLE",
+      "category": "finish"
+    }
+  ],
+  "rawText": "Nuovo gres 60x120",
+  "context": {
+    "areaM2": 6.8,
+    "wallHeightM": 2.7
+  }
+}
+```
+
+Target supportati:
+
+- `wall`
+- `floor`
+- `ceiling`
+- `room`
+- `opening`
+
+Categorie principali:
+
+- `demolition`
+- `construction`
+- `finish`
+- `general`
+
+`displayStyle` può essere:
+
+- `callout`: vignetta con linea di richiamo;
+- `text`: testo direttamente sulla planimetria.
+
+Il backend deve conservare questi dati nel JSON strutturato e, quando genera
+SVG/PDF/PNG/DXF, rappresentare l'intervento in modo coerente con il target.
+
+Questa struttura è intenzionalmente adatta anche a futuri computi metrici:
+`workItems[].code` identifica la lavorazione, mentre `context` contiene le
+quantità metriche già disponibili dal rilievo.
