@@ -168,3 +168,12 @@ test('20 vecchi metadata parziali non perdono remotePlanId', () => {
   assert.equal(plan.backend.status,'PROCESSING');
   assert.equal(plan.backend.files.pdf,'/old.pdf');
 });
+
+
+test('21 polling senza file non cancella elaborati già ricevuti', () => {
+  const plan=basePlan(); ensureBackendMetadata(plan);
+  applyBackendSnapshot(plan,{status:'PROCESSING',files:{svg:'/keep.svg'},summary:{floor_area_m2:6.2}});
+  applyBackendSnapshot(plan,{status:'PROCESSING'});
+  assert.equal(plan.backend.files.svg,'/keep.svg');
+  assert.equal(plan.backend.summary.floorAreaM2,6.2);
+});
