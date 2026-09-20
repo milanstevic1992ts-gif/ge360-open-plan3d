@@ -778,35 +778,54 @@ import {
     showObjectActionBar('opening', obj, obj.position);
   }
 
-  function commitOpeningMove(p) {
+  function updateOpeningMoveAt(p) {
     if (!openingMoveMode) return false;
     var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
-    if (!opening) {
-      openingMoveMode = null;
-      return false;
-    }
+    if (!opening) return false;
     var wall = walls.find(function (w) { return w.id === opening.wallId; });
-    if (!wall) {
-      openingMoveMode = null;
-      return false;
-    }
+    if (!wall) return false;
     var hit = distToSegment(p, wall.a, wall.b);
-    if (hit.distance > 55 / viewZoom) {
-      toast('Tocca sul muro della ' + (opening.type === 'door' ? 'porta' : 'finestra'));
-      return true;
-    }
+    if (hit.distance > 55 / viewZoom) return false;
 
-    checkpoint();
     opening.position = Math.max(.01, Math.min(.99, hit.t));
     syncOpeningMetricFromPosition(opening, wall);
-    openingMoveMode = null;
     currentOpeningId = opening.id;
     surfaceCache = null;
+    render();
+    return true;
+  }
+
+  function startOpeningMoveDrag(e, p) {
+    if (!openingMoveMode) return false;
+    if (!updateOpeningMoveAt(p)) {
+      var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+      toast('Trascina sul muro della ' + (opening && opening.type === 'window' ? 'finestra' : 'porta'));
+      return true;
+    }
+    checkpoint();
+    openingMoveMode.dragging = true;
+    openingMoveMode.pointerId = e.pointerId;
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    vibrate(12);
+    return true;
+  }
+
+  function updateOpeningMoveDrag(e) {
+    if (!openingMoveMode || !openingMoveMode.dragging || openingMoveMode.pointerId !== e.pointerId) return false;
+    var p = point(e);
+    updateOpeningMoveAt(p);
+    return true;
+  }
+
+  function finishOpeningMoveDrag(e) {
+    if (!openingMoveMode || !openingMoveMode.dragging || openingMoveMode.pointerId !== e.pointerId) return false;
+    var opening = openings.find(function (o) { return o.id === openingMoveMode.openingId; });
+    openingMoveMode = null;
     persistActive();
     updateUI();
     render();
     vibrate(20);
-    toast((opening.type === 'door' ? 'Porta' : 'Finestra') + ' spostata ✓');
+    toast((opening && opening.type === 'window' ? 'Finestra' : 'Porta') + ' spostata ✓');
     return true;
   }
 
@@ -3548,7 +3567,7 @@ import {
     }
     var p = screenToWorld(sp);
     if (openingMoveMode) {
-      commitOpeningMove(p);
+      startOpeningMoveDrag(e, p);
       return;
     }
     if (wallMoveMode) {
@@ -3581,6 +3600,11 @@ import {
 
   canvas.addEventListener('pointermove', function (e) {
     if (e.isPrimary === false) return;
+    if (openingMoveMode && openingMoveMode.dragging && openingMoveMode.pointerId === e.pointerId) {
+      e.preventDefault();
+      updateOpeningMoveDrag(e);
+      return;
+    }
     if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
       e.preventDefault();
       updateAnnotationDrag(e);
@@ -3600,6 +3624,11 @@ import {
 
   canvas.addEventListener('pointerup', function (e) {
     if (e.isPrimary === false) return;
+    if (openingMoveMode && openingMoveMode.dragging && openingMoveMode.pointerId === e.pointerId) {
+      e.preventDefault();
+      finishOpeningMoveDrag(e);
+      return;
+    }
     if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
       e.preventDefault();
       finishAnnotationDrag(e);
@@ -3617,6 +3646,10 @@ import {
 
   canvas.addEventListener('pointercancel', function (e) {
     cancelLongPress();
+    if (openingMoveMode && openingMoveMode.dragging && openingMoveMode.pointerId === e.pointerId) {
+      finishOpeningMoveDrag(e);
+      return;
+    }
     if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
       finishAnnotationDrag(e);
       return;
