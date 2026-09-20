@@ -318,3 +318,83 @@ Il frontend può allegare un riepilogo già calcolato dagli interventi:
 Il backend deve ricalcolare o validare le quantità quando dispone di una
 geometria autoritativa più aggiornata. Le righe con `estimated: true` devono
 restare distinguibili dalle quantità confermate.
+
+
+## Schema v4: cantieri e foto direzionali
+
+Il payload frontend dichiara:
+
+```json
+{
+  "metadata": {
+    "schemaVersion": 4,
+    "features": [
+      "architectural-openings",
+      "structured-interventions",
+      "automatic-rooms",
+      "linked-local-photos",
+      "directional-photos",
+      "progressive-takeoff",
+      "worksite-archive"
+    ]
+  }
+}
+```
+
+### Archivio cantiere
+
+Ogni rilievo può contenere:
+
+```json
+{
+  "siteId": "site-123",
+  "site": {
+    "id": "site-123",
+    "title": "Bagno Rossi",
+    "clientName": "Mario Rossi",
+    "address": "Via Esempio 10, Trieste",
+    "phone": "+39...",
+    "email": "cliente@example.it",
+    "status": "survey",
+    "notes": "",
+    "createdAt": "2026-09-20T20:00:00Z",
+    "updatedAt": "2026-09-20T21:00:00Z"
+  }
+}
+```
+
+Lo snapshot `site` permette a report/PDF di mostrare cliente e cantiere anche
+senza interrogare un archivio separato. `siteId` resta l'identificatore
+stabile per collegare più rilievi allo stesso lavoro.
+
+Stati supportati: `lead`, `survey`, `quote`, `active`, `paused`,
+`done`.
+
+### Foto direzionali
+
+Una foto può contenere coordinate locali della planimetria:
+
+```json
+{
+  "id": "photo-1",
+  "targetType": "wall",
+  "targetId": "w2",
+  "cameraPoint": { "x": 124.2, "y": 88.5 },
+  "targetPoint": { "x": 201.0, "y": 91.1 },
+  "directionDeg": 1.94,
+  "localOnly": true
+}
+```
+
+`cameraPoint` identifica dove si trovava l'operatore. `targetPoint`
+identifica il soggetto collegato. `directionDeg` è calcolato dal primo al
+secondo punto.
+
+Il backend deve preservare questi campi nei JSON e può usarli per disegnare
+icona camera + freccia nei report planimetrici.
+
+### Backup locali
+
+I backup automatici non vengono inviati nel payload. Restano esclusivamente sul
+dispositivo in IndexedDB e conservano fino a 20 snapshot per rilievo. Questo è
+intenzionale: sono un meccanismo di recupero locale, non versioni backend.
