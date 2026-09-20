@@ -551,7 +551,7 @@ import {
         actions.className='site-card-actions';
         var filterBtn=document.createElement('button');
         filterBtn.type='button';
-        filterBtn.textContent=String(activeSiteFilter)===String(site.id) ? 'MOSTRA TUTTI' : 'APR I RILIEVI';
+        filterBtn.textContent=String(activeSiteFilter)===String(site.id) ? 'MOSTRA TUTTI' : 'APRI RILIEVI';
         filterBtn.addEventListener('click',function () {
           activeSiteFilter=String(activeSiteFilter)===String(site.id) ? 'all' : site.id;
           renderDashboard();
@@ -3798,6 +3798,11 @@ import {
     $('notesBtn').classList.toggle('hidden', !has);
     $('photosBtn').classList.toggle('hidden', !has);
     $('takeoffBtn').classList.toggle('hidden', !has);
+    $('siteBtn').classList.toggle('hidden', !has);
+    $('backupsBtn').classList.toggle('hidden', !has);
+    var linkedSite=currentSite();
+    $('currentSiteBadge').classList.toggle('hidden',!linkedSite);
+    $('currentSiteBadge').textContent=linkedSite ? '🏗️ '+siteLabel(linkedSite)+' · '+statusLabel(linkedSite.status) : '';
     var notesTitle = $('notesBtn').querySelector('b');
     if (notesTitle) notesTitle.textContent = 'INTERVENTI' + (notes.length ? ' · ' + notes.length : '');
     var photosTitle = $('photosBtn').querySelector('b');
@@ -4631,6 +4636,9 @@ import {
   });
 
   $('newPlanBtn').addEventListener('click', newPlan);
+  $('newSiteBtn').addEventListener('click', function () { openSiteModal(null,null); });
+  $('showAllSitesBtn').addEventListener('click', function () { activeSiteFilter='all'; renderDashboard(); });
+  $('showNoSiteBtn').addEventListener('click', function () { activeSiteFilter='none'; renderDashboard(); });
   $('settingsBtn').addEventListener('click', openSettings);
   $('closeSettingsBtn').addEventListener('click', closeSettings);
   $('saveSettingsBtn').addEventListener('click', saveSettings);
@@ -4689,12 +4697,24 @@ import {
   $('surfacesBtn').addEventListener('click', function () { runTool(openSurfaces); });
   $('photosBtn').addEventListener('click', openPhotosGallery);
   $('takeoffBtn').addEventListener('click', openTakeoff);
+  $('siteBtn').addEventListener('click', openCurrentPlanSite);
+  $('backupsBtn').addEventListener('click', openBackups);
+  $('currentSiteBadge').addEventListener('click', openCurrentPlanSite);
   $('closePhotosBtn').addEventListener('click', closePhotosGallery);
   $('photosBackdrop').addEventListener('click', function (e) { if (e.target === $('photosBackdrop')) closePhotosGallery(); });
   $('photoInput').addEventListener('change', handlePhotoInput);
   $('roomPhotoBtn').addEventListener('click', captureCurrentRoomPhoto);
   $('closeTakeoffBtn').addEventListener('click', closeTakeoff);
   $('takeoffBackdrop').addEventListener('click', function (e) { if (e.target === $('takeoffBackdrop')) closeTakeoff(); });
+  $('closeSiteBtn').addEventListener('click', closeSiteModal);
+  $('siteBackdrop').addEventListener('click', function (e) { if (e.target === $('siteBackdrop')) closeSiteModal(); });
+  $('saveSiteBtn').addEventListener('click', saveSiteFromModal);
+  $('linkExistingSiteBtn').addEventListener('click', linkExistingSite);
+  $('detachPlanSiteBtn').addEventListener('click', detachCurrentPlanSite);
+  $('deleteSiteBtn').addEventListener('click', deleteEditingSite);
+  $('closeBackupsBtn').addEventListener('click', closeBackups);
+  $('backupsBackdrop').addEventListener('click', function (e) { if (e.target === $('backupsBackdrop')) closeBackups(); });
+  $('createBackupBtn').addEventListener('click', createManualBackup);
   $('presentBtn').addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
