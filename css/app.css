@@ -48,14 +48,20 @@
 #settingsBackdrop{z-index:280}
 #noteTargetBackdrop,#noteEditorBackdrop{z-index:240}
 
-@media(max-height:700px){
-  .work-actions{display:grid;grid-template-columns:repeat(2,max-content);gap:6px}
-  .work-actions button{height:42px;padding:0 10px;font-size:10px}
-  .work-actions .solve-plan-btn{grid-column:1/-1;width:100%}
-}
 
 @media(max-width:390px){
   .note-actions{grid-template-columns:1fr}
   .note-actions button{height:50px}
   .settings-actions{grid-template-columns:1fr}
 }
+
+.tools-menu-btn{font-size:18px;letter-spacing:2px}
+.tools-backdrop{position:fixed;inset:0;z-index:170;background:rgba(15,23,42,.52);display:flex;align-items:flex-end;justify-content:center;padding:0}
+.tools-sheet{width:100%;max-width:620px;background:#fff;border-radius:28px 28px 0 0;padding:12px 14px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -20px 60px rgba(15,23,42,.28)}
+.tools-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.tools-head h2{margin:2px 0 0;font-size:24px}
+.tools-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.tool-card{min-height:92px;border-radius:18px;padding:12px;text-align:left;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;border:1px solid #e2e8f0;box-shadow:none!important;position:static!important}
+.tool-card span{font-size:24px;line-height:1}.tool-card b{font-size:13px;line-height:1.15}.tool-card small{font-size:10px;font-weight:800;opacity:.68}
+.tool-card.notes-btn{background:#fffbeb;color:#92400e}.tool-card.present-btn{background:#0f172a;color:#fff}.tool-card.room-btn{background:#f0fdf4;color:#166534}.tool-card.surfaces-btn{background:#f0f9ff;color:#075985}.tool-card.solve-plan-btn{height:auto!important;background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff}.tool-card.danger-tool{background:#fef2f2;color:#b91c1c}
+.tool-card:active{transform:scale(.985)}
+@media(max-width:360px){.tools-grid{gap:7px}.tool-card{min-height:82px;padding:10px}.tool-card b{font-size:12px}.tool-card small{font-size:9px}}
