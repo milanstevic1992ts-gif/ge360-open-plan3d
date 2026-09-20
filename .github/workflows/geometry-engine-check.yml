@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14, auto-straight-walls-v16, corner-magnet-v18 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14, auto-straight-walls-v16, corner-magnet-v18, frontend-backend-elaborati-v1 ]
   workflow_dispatch:
 
 permissions:
@@ -314,6 +314,19 @@ jobs:
           grep -q "require_key(x_ge360_api_key)" backend/app.py
           grep -q "OLLAMA_BASE_URL" backend/app.py
           grep -q "OLLAMA_MODEL" backend/app.py
+
+      - name: Check Elaborati backend integration hooks
+        run: |
+          node --check js/backend-client.js
+          node --check js/processed-plan.js
+          node --check js/processed-files.js
+          node --check js/processed-viewer.js
+          node --check js/view3d.js
+          grep -q 'id="processedWorkspace"' index.html
+          grep -q 'id="elaborateBtn"' index.html
+          grep -q "function startProcessing" js/app.js
+          grep -q "PROCESS_POLL_MS = 2000" js/app.js
+          grep -q "ge360-rilievo-library-v3" js/app.js
 
       - name: Verify engine stays isolated
         run: |
