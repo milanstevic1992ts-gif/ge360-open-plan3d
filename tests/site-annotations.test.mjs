@@ -84,8 +84,11 @@ test('payload backend espone notes e interventions senza perdere compatibilità'
     openings:[],rooms:[],notes:[note],wallHeightM:2.7
   };
   const payload=buildProcessingPayload(plan);
-  assert.equal(payload.metadata.schemaVersion,2);
+  assert.equal(payload.metadata.schemaVersion,3);
   assert.ok(payload.metadata.features.includes('structured-interventions'));
+  assert.ok(payload.metadata.features.includes('automatic-rooms'));
+  assert.ok(payload.metadata.features.includes('linked-local-photos'));
+  assert.ok(payload.metadata.features.includes('progressive-takeoff'));
   assert.equal(payload.notes.length,1);
   assert.equal(payload.interventions.length,1);
   assert.equal(payload.interventions[0].workItems[0].code,'floor_demolish_rebuild');
