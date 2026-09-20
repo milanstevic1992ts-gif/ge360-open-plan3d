@@ -2761,12 +2761,98 @@ import {
     }
   }
 
-  function exportJson() {
+  function buildSurveyChecks() {
+    var checks = [];
+    if (!walls.length) {
+      checks.push({level:'error',text:'Nessun muro disegnato'});
+      return checks;
+    }
+
+    var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing.length) checks.push({level:'error',text:missing.length + ' muri senza misura reale'});
+
+    var badOpenings = openings.filter(function (o) {
+      return !Number.isFinite(o.widthCm) || o.widthCm <= 0 || !Number.isFinite(o.offsetCm) || o.offsetCm < 0;
+    });
+    if (badOpenings.length) checks.push({level:'error',text:badOpenings.length + ' porte/finestre con quote incomplete'});
+
+    var pendingT = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
+    if (pendingT.length) checks.push({level:'warning',text:pendingT.length + ' possibili innesti a T da controllare'});
+
+    var faces = buildFaces(walls);
+    rooms.forEach(function (room) {
+      if (!matchRoomFace(room, faces)) {
+        checks.push({level:'warning',text:'Ambiente “' + (room.name || 'senza nome') + '” non è riconosciuto come superficie chiusa'});
+      }
+    });
+
+    notes.forEach(function (note) {
+      if (!noteAnchor(note)) checks.push({level:'warning',text:'Un intervento non è più collegato a un elemento esistente'});
+    });
+
+    if (!missing.length) {
+      try {
+        var result = solveFloorPlan(solverInput(), {mode:'normal',maxClosureGapCm:10});
+        (result.errors || []).slice(0,3).forEach(function (err) {
+          checks.push({level:'error',text:err.message || 'Errore geometrico'});
+        });
+        if (result.stats && result.stats.componentCount > 1) {
+          checks.push({level:'warning',text:result.stats.componentCount + ' gruppi di muri risultano scollegati'});
+        }
+        if (result.stats && result.stats.loopCount > 0 && result.closure && !result.closure.closed) {
+          checks.push({level:'error',text:'La planimetria contiene loop che non chiudono con le misure inserite'});
+        } else if (result.stats && result.stats.loopCount === 0) {
+          checks.push({level:'warning',text:'Nessun ambiente completamente chiuso rilevato'});
+        }
+      } catch (e) {
+        checks.push({level:'warning',text:'Controllo geometrico non completato: ' + (e.message || e)});
+      }
+    }
+
+    return checks;
+  }
+
+  function closeFinishCheck() {
+    $('finishCheckBackdrop').classList.add('hidden');
+  }
+
+  function openFinishCheck() {
+    persistActive();
+    autoRepairTJunctions();
+    var checks = buildSurveyChecks();
+    var errors = checks.filter(function (x) { return x.level === 'error'; }).length;
+    var warnings = checks.filter(function (x) { return x.level === 'warning'; }).length;
+    var title = $('finishCheckTitle');
+    var summaryEl = $('finishCheckSummary');
+    var list = $('finishCheckList');
+    list.innerHTML = '';
+
+    if (!checks.length) {
+      title.textContent = 'Rilievo pronto ✓';
+      summaryEl.className = 'finish-check-summary ok';
+      summaryEl.textContent = 'Misure complete, geometria coerente e nessun problema importante rilevato.';
+    } else {
+      title.textContent = errors ? 'Da correggere prima possibile' : 'Rilievo con avvisi';
+      summaryEl.className = 'finish-check-summary ' + (errors ? 'error' : 'warn');
+      summaryEl.textContent = errors + ' errori · ' + warnings + ' avvisi';
+      checks.forEach(function (item) {
+        var row = document.createElement('div');
+        row.className = 'finish-check-row ' + item.level;
+        row.textContent = (item.level === 'error' ? '✕ ' : '⚠ ') + item.text;
+        list.appendChild(row);
+      });
+    }
+
+    $('exportFinishCheckBtn').textContent = checks.length ? 'SALVA BOZZA JSON' : 'RILIEVO PRONTO · ESPORTA';
+    $('finishCheckBackdrop').classList.remove('hidden');
+  }
+
+  function exportJson(force) {
     persistActive();
     var plan = currentPlan();
     if (!plan || !plan.walls || !plan.walls.length) return toast('Prima fai uno schizzo');
     var missing = plan.walls.filter(function (w) { return !w.lengthCm; }).length;
-    if (missing) {
+    if (missing && !force) {
       toast('Mancano ' + missing + ' misure');
       return openNextMissing();
     }
@@ -3552,7 +3638,7 @@ import {
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
   $('windowBtn').addEventListener('click', function () { setMode('window'); });
   $('measureBtn').addEventListener('click', startMeasureMode);
-  $('doneBtn').addEventListener('click', exportJson);
+  $('doneBtn').addEventListener('click', openFinishCheck);
   $('undoBtn').addEventListener('click', undo);
   $('redoBtn').addEventListener('click', redo);
   $('objectMeasureBtn').addEventListener('click', measureSelectedObject);
@@ -3561,6 +3647,15 @@ import {
   $('objectSwingBtn').addEventListener('click', swingSelectedDoor);
   $('objectDeleteBtn').addEventListener('click', deleteSelectedObject);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
+  $('closeFinishCheckBtn').addEventListener('click', closeFinishCheck);
+  $('fixFinishCheckBtn').addEventListener('click', closeFinishCheck);
+  $('exportFinishCheckBtn').addEventListener('click', function () {
+    closeFinishCheck();
+    exportJson(true);
+  });
+  $('finishCheckBackdrop').addEventListener('click', function (e) {
+    if (e.target === $('finishCheckBackdrop')) closeFinishCheck();
+  });
   $('toolsBtn').addEventListener('click', openTools);
   $('closeToolsBtn').addEventListener('click', closeTools);
   $('toolsBackdrop').addEventListener('click', function (e) { if (e.target === $('toolsBackdrop')) closeTools(); });
