@@ -30,7 +30,7 @@ export function solveFloorPlan(input, options = {}) {
       errors: errors.length ? errors : [{ type: "nothing_to_solve", severity: "error", message: "Nessun muro utilizzabile." }],
       closure: { closed: false, errorCm: null, loops: [] },
       changes: [],
-      stats: { originalWallCount: walls.length, solvedWallCount: 0, timeMs: round(now() - t0, 2) },
+      stats: { originalWallCount: walls.length, solvedWallCount: 0, repairedJoints: (an.topologyRepairs || []).length, timeMs: round(now() - t0, 2) },
     };
   }
 
@@ -315,6 +315,7 @@ export function solveFloorPlan(input, options = {}) {
       snappedAngles: snapped,
       parallelConstraints: parallels,
       releasedWalls: releaseLog.length,
+      repairedJoints: (an.topologyRepairs || []).length,
       closureErrorCm: closure.errorCm ?? 0,
       loopCount: loops.length,
       componentCount: topo.components.length,
@@ -323,6 +324,11 @@ export function solveFloorPlan(input, options = {}) {
       iterations,
       timeMs: round(now() - t0, 2),
     },
+    topologyRepairs: (an.topologyRepairs || []).map((r) => ({
+      walls: [r.wallA, r.wallB].filter(Boolean),
+      ends: [r.endA, r.endB],
+      sketchGapUnits: round(r.distance, 3)
+    })),
     verification: {
       maxLengthErrorCm: maxLenErr,
       maxConstraintErrorDeg: toDeg(maxConstraintErr),
