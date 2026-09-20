@@ -464,9 +464,13 @@ import {
     };
   }
 
-  function point(e) {
+  function screenPoint(e) {
     var r = canvas.getBoundingClientRect();
-    return screenToWorld({ x: e.clientX - r.left, y: e.clientY - r.top });
+    return { x:e.clientX-r.left, y:e.clientY-r.top };
+  }
+
+  function point(e) {
+    return screenToWorld(screenPoint(e));
   }
 
   function updateViewControls() {
@@ -3384,6 +3388,61 @@ import {
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
   }
 
+  function annotationHitAt(sp) {
+    for (var i=annotationHitBoxes.length-1;i>=0;i--) {
+      var b = annotationHitBoxes[i];
+      if (sp.x >= b.x-5 && sp.x <= b.x+b.w+5 && sp.y >= b.y-5 && sp.y <= b.y+b.h+5) return b;
+    }
+    return null;
+  }
+
+  function startAnnotationDrag(e, hit) {
+    var note = notes.find(function (n) { return n.id === hit.noteId; });
+    if (!note) return false;
+    var anchorWorld = noteAnchor(note);
+    if (!anchorWorld) return false;
+    checkpoint();
+    annotationDrag = {
+      noteId:note.id,
+      pointerId:e.pointerId,
+      start:screenPoint(e),
+      initialCenter:{x:hit.center.x,y:hit.center.y},
+      anchorWorld:anchorWorld
+    };
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    hideObjectActionBar();
+    vibrate(12);
+    return true;
+  }
+
+  function updateAnnotationDrag(e) {
+    if (!annotationDrag || annotationDrag.pointerId !== e.pointerId) return false;
+    var note = notes.find(function (n) { return n.id === annotationDrag.noteId; });
+    if (!note) return false;
+    var sp = screenPoint(e);
+    var center = {
+      x:annotationDrag.initialCenter.x + sp.x - annotationDrag.start.x,
+      y:annotationDrag.initialCenter.y + sp.y - annotationDrag.start.y
+    };
+    var centerWorld = screenToWorld(center);
+    note.labelOffset = {
+      x:centerWorld.x - annotationDrag.anchorWorld.x,
+      y:centerWorld.y - annotationDrag.anchorWorld.y
+    };
+    render();
+    return true;
+  }
+
+  function finishAnnotationDrag(e) {
+    if (!annotationDrag || annotationDrag.pointerId !== e.pointerId) return false;
+    annotationDrag = null;
+    persistActive();
+    updateUI();
+    render();
+    vibrate(12);
+    return true;
+  }
+
   function resize() {
     if ($('editor').classList.contains('hidden')) return;
     var rect = canvas.getBoundingClientRect();
@@ -3396,7 +3455,12 @@ import {
   canvas.addEventListener('pointerdown', function (e) {
     if (e.isPrimary === false) return;
     e.preventDefault();
-    var p = point(e);
+    var sp = screenPoint(e);
+    if (editorLayer === 'works') {
+      var annotationHit = annotationHitAt(sp);
+      if (annotationHit && startAnnotationDrag(e, annotationHit)) return;
+    }
+    var p = screenToWorld(sp);
     if (openingMoveMode) {
       commitOpeningMove(p);
       return;
@@ -3431,6 +3495,11 @@ import {
 
   canvas.addEventListener('pointermove', function (e) {
     if (e.isPrimary === false) return;
+    if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
+      e.preventDefault();
+      updateAnnotationDrag(e);
+      return;
+    }
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
@@ -3445,6 +3514,11 @@ import {
 
   canvas.addEventListener('pointerup', function (e) {
     if (e.isPrimary === false) return;
+    if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
+      e.preventDefault();
+      finishAnnotationDrag(e);
+      return;
+    }
     var longHandled = !!(longPressState && longPressState.pointerId === e.pointerId && longPressState.handled);
     cancelLongPress();
     if (longHandled) return;
@@ -3457,6 +3531,10 @@ import {
 
   canvas.addEventListener('pointercancel', function (e) {
     cancelLongPress();
+    if (annotationDrag && annotationDrag.pointerId === e.pointerId) {
+      finishAnnotationDrag(e);
+      return;
+    }
     if (e.pointerId !== activePointerId) return;
     currentStroke = null;
     activePointerId = null;
