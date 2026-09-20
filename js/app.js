@@ -3622,6 +3622,113 @@ import {
     $('takeoffBackdrop').classList.add('hidden');
   }
 
+  function backupReasonLabel(reason) {
+    if (reason==='manual') return 'MANUALE';
+    if (reason==='before-restore') return 'PRIMA DEL RIPRISTINO';
+    return 'AUTOMATICO';
+  }
+
+  async function renderBackups() {
+    var list=$('backupList');
+    list.innerHTML='';
+    if (!activePlanId) return;
+    try {
+      var backups=await listPlanBackups(activePlanId);
+      if (!backups.length) {
+        var empty=document.createElement('div');
+        empty.className='backup-empty';
+        empty.textContent='Nessun backup ancora. Verranno creati automaticamente quando modifichi il rilievo.';
+        list.appendChild(empty);
+        return;
+      }
+
+      backups.forEach(function (backup,index) {
+        var row=document.createElement('div');
+        row.className='backup-row';
+        var info=document.createElement('div');
+        info.className='backup-row-info';
+        var title=document.createElement('b');
+        title.textContent=(index===0 ? 'ULTIMA VERSIONE · ' : '')+backupReasonLabel(backup.reason);
+        var meta=document.createElement('span');
+        meta.textContent=new Date(backup.createdAt).toLocaleString('it-IT',{
+          day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'
+        });
+        info.appendChild(title);
+        info.appendChild(meta);
+
+        var restore=document.createElement('button');
+        restore.type='button';
+        restore.textContent='RIPRISTINA';
+        restore.addEventListener('click',function () { restoreBackup(backup.id); });
+
+        row.appendChild(info);
+        row.appendChild(restore);
+        list.appendChild(row);
+      });
+    } catch (e) {
+      var err=document.createElement('div');
+      err.className='backup-empty';
+      err.textContent='Backup non disponibili: '+(e.message || e);
+      list.appendChild(err);
+    }
+  }
+
+  async function openBackups() {
+    closeTools();
+    $('backupsBackdrop').classList.remove('hidden');
+    await renderBackups();
+  }
+
+  function closeBackups() {
+    $('backupsBackdrop').classList.add('hidden');
+  }
+
+  async function createManualBackup() {
+    var plan=currentPlan();
+    if (!plan) return;
+    persistActive();
+    try {
+      await createPlanBackup(plan,'manual');
+      await renderBackups();
+      toast('Backup creato ✓');
+    } catch (e) {
+      toast('Backup non creato · '+(e.message || 'errore'));
+    }
+  }
+
+  async function restoreBackup(backupId) {
+    var plan=currentPlan();
+    if (!plan) return;
+    if (!confirm('Ripristinare questa versione del rilievo?\nLa versione attuale verrà salvata prima del ripristino.')) return;
+    try {
+      persistActive();
+      await createPlanBackup(plan,'before-restore');
+      var backup=await getPlanBackup(backupId);
+      if (!backup || !backup.snapshot) throw new Error('Snapshot non trovato');
+
+      var restored=clone(backup.snapshot);
+      restored.id=plan.id;
+      restored.updatedAt=new Date().toISOString();
+      ensureBackendMetadata(restored);
+      if (restored.backend) {
+        restored.backend.status='LOCAL';
+        restored.backend.jobId=null;
+        restored.backend.error=null;
+      }
+      refreshSourceRevision(restored);
+
+      var idx=library.findIndex(function (p) { return String(p.id)===String(plan.id); });
+      if (idx<0) throw new Error('Rilievo non trovato');
+      library[idx]=restored;
+      saveLibrary();
+      closeBackups();
+      openPlan(restored.id);
+      toast('Backup ripristinato ✓');
+    } catch (e) {
+      toast('Ripristino non riuscito · '+(e.message || 'errore'));
+    }
+  }
+
   function openTools() {
     if (!walls.length) return toast('Prima disegna la pianta');
     cancelPickModes();
