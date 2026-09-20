@@ -660,7 +660,12 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     if (sheetType === 'wall') {
       checkpoint();
       var wall = walls.find(function (w) { return w.id === selectedWallId; });
-      if (wall) wall.lengthCm = Math.round(meters * 100);
+      if (wall) {
+        wall.lengthCm = Math.round(meters * 100);
+        openings.filter(function (o) { return o.wallId === wall.id; }).forEach(function (o) {
+          recalcOpeningPosition(o);
+        });
+      }
       surfaceCache = null;
       var strokeId = wall ? wall.strokeId : null;
       var next = walls.find(function (w) { return w.strokeId === strokeId && !w.lengthCm && w.id !== selectedWallId; });
