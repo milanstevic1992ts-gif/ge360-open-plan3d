@@ -368,26 +368,70 @@ import {
     });
   }
 
-  function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, wallHeightM: wallHeightM }));
-    if (history.length > 30) history.shift();
+  function editorSnapshot() {
+    return JSON.stringify({
+      rawStrokes:rawStrokes,
+      walls:walls,
+      openings:openings,
+      rooms:rooms,
+      notes:notes,
+      wallHeightM:wallHeightM,
+      liveScaleCmPerUnit:liveScaleCmPerUnit,
+      editorLayer:editorLayer
+    });
   }
 
-  function undo() {
-    if (!history.length) return toast('Niente da annullare');
-    var data = JSON.parse(history.pop());
+  function restoreEditorSnapshot(raw) {
+    var data = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
     rawStrokes = data.rawStrokes || [];
     walls = data.walls || [];
     openings = data.openings || [];
     rooms = data.rooms || [];
-    notes = data.notes || [];
+    notes = (data.notes || []).map(function (note) { return migrateIntervention(note); });
     wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
+    liveScaleCmPerUnit = Number.isFinite(data.liveScaleCmPerUnit) ? data.liveScaleCmPerUnit : estimateScaleCmPerUnit(walls);
+    editorLayer = data.editorLayer === 'works' ? 'works' : 'survey';
     surfaceCache = null;
+    selectedObject = null;
+    openingMoveMode = null;
+    wallMoveMode = null;
+    annotationDrag = null;
     closeSheet();
+    hideObjectActionBar();
+    refreshSurfaceCache();
     persistActive();
     updateUI();
     render();
+  }
+
+  function checkpoint() {
+    history.push(editorSnapshot());
+    if (history.length > 40) history.shift();
+    future = [];
+    updateHistoryButtons();
+  }
+
+  function undo() {
+    if (!history.length) return toast('Niente da annullare');
+    future.push(editorSnapshot());
+    if (future.length > 40) future.shift();
+    restoreEditorSnapshot(history.pop());
+    updateHistoryButtons();
     vibrate(20);
+  }
+
+  function redo() {
+    if (!future.length) return toast('Niente da ripristinare');
+    history.push(editorSnapshot());
+    if (history.length > 40) history.shift();
+    restoreEditorSnapshot(future.pop());
+    updateHistoryButtons();
+    vibrate(20);
+  }
+
+  function updateHistoryButtons() {
+    if ($('undoBtn')) $('undoBtn').disabled = history.length === 0;
+    if ($('redoBtn')) $('redoBtn').disabled = future.length === 0;
   }
 
   function viewCenter() {
