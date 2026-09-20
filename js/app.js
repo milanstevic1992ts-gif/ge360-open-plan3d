@@ -107,7 +107,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     plan.rooms = clone(rooms);
     plan.wallHeightM = wallHeightM;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
-    if (surfaceCache && surfaceCache.totals) plan.surfaceSummary = clone(surfaceCache.totals);
+    plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
     plan.summary = summary();
     saveLibrary();
     if (showToast) toast('Salvato ✓');
@@ -168,6 +168,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     showEditor();
     updateViewControls();
     updateUI();
+    refreshSurfaceCache();
     render();
   }
 
@@ -588,6 +589,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       } else {
         selectedWallId = null;
         closeSheet();
+        refreshSurfaceCache();
         toast('Misure completate ✓');
       }
     } else if (sheetType === 'opening-width') {
@@ -893,6 +895,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     viewZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((canvas.clientWidth - 70) / bw, (canvas.clientHeight - 120) / bh)));
     viewRotation = 0;
     updateViewControls();
+    refreshSurfaceCache();
     persistActive();
     updateUI();
     render();
