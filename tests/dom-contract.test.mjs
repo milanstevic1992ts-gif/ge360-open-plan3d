@@ -172,3 +172,36 @@ test('computo live aggrega quantità dagli interventi',()=>{
   assert.match(app,/function renderTakeoff\(/);
   assert.match(app,/function openTakeoff\(/);
 });
+
+
+test('foto direzionali richiedono punto di scatto e disegnano la freccia',()=>{
+  assert.match(html,/id="photoPlacementBanner"/);
+  assert.match(app,/pendingPhotoPlacement/);
+  assert.match(app,/function commitPhotoPlacement\(/);
+  assert.match(app,/function drawDirectionalPhotos\(/);
+  assert.match(app,/directionDeg/);
+  assert.match(app,/updatePhotoMetadata\(/);
+});
+
+test('backup locali espongono creazione ripristino e massimo storico gestito',()=>{
+  assert.match(html,/id="backupsBtn"/);
+  assert.match(html,/id="backupsBackdrop"/);
+  assert.match(html,/id="backupList"/);
+  assert.match(app,/function scheduleAutoBackup\(/);
+  assert.match(app,/function openBackups\(/);
+  assert.match(app,/function restoreBackup\(/);
+  assert.match(app,/createPlanBackup\(plan,'before-restore'\)/);
+});
+
+test('archivio cantieri collega cliente indirizzo stato e rilievi',()=>{
+  assert.match(html,/id="siteArchive"/);
+  assert.match(html,/id="newSiteBtn"/);
+  assert.match(html,/id="siteBackdrop"/);
+  assert.match(html,/id="siteClientInput"/);
+  assert.match(html,/id="siteAddressInput"/);
+  assert.match(html,/id="siteStatusInput"/);
+  assert.match(app,/function renderSiteArchive\(/);
+  assert.match(app,/function saveSiteFromModal\(/);
+  assert.match(app,/function linkExistingSite\(/);
+  assert.match(app,/plan\.siteId=site\.id/);
+});
