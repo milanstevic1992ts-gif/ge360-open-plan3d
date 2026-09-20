@@ -105,6 +105,19 @@ export class BackendClient {
     return this.request('/plans/' + encodeURIComponent(planId) + '/reprocess', { method: 'POST', body: payload });
   }
 
+  getFileUrl(resource) {
+    return this.resolve(resource);
+  }
+
+  async downloadFile(resource) {
+    return this.fetchBlob(resource);
+  }
+
+  async downloadAll(resource) {
+    if (!resource) throw new BackendError('ZIP elaborati non disponibile');
+    return this.fetchBlob(resource);
+  }
+
   async fetchBlob(resource) {
     return this.request(resource, { responseType: 'blob', timeoutMs: 45000 });
   }
