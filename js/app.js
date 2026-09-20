@@ -607,6 +607,7 @@ import {
       stroke.wallIds.push(wall.id);
     }
 
+    autoRepairTJunctions();
     persistActive();
     updateUI();
     render();
@@ -1164,6 +1165,187 @@ import {
     opening.position = Math.max(.01, Math.min(.99, t));
   }
 
+  function syncOpeningMetricFromPosition(opening, wall) {
+    if (!opening || !wall || !Number.isFinite(wall.lengthCm) || wall.lengthCm <= 0) return;
+    var t = Math.max(.001, Math.min(.999, Number.isFinite(opening.position) ? opening.position : .5));
+    var half = (Number.isFinite(opening.widthCm) ? opening.widthCm : 0) / 2;
+    if (opening.referenceEnd === 'b') {
+      opening.offsetCm = Math.max(0, Math.round(wall.lengthCm * (1 - t) - half));
+    } else {
+      opening.offsetCm = Math.max(0, Math.round(wall.lengthCm * t - half));
+    }
+  }
+
+  function refreshWallInterventionLabels() {
+    notes.forEach(function (note) {
+      if (note.targetType !== 'wall') return;
+      var idx = walls.findIndex(function (w) { return w.id === note.targetId; });
+      if (idx < 0) return;
+      var room = roomForWall(note.targetId);
+      note.targetLabel = 'Muro ' + wallReference(idx) + (room ? ' · ' + room.name : '');
+      note.roomName = room ? room.name : null;
+    });
+  }
+
+  function splitWallAtTJunction(target, branch, branchEnd, point, t) {
+    var targetIndex = walls.findIndex(function (w) { return w.id === target.id; });
+    if (targetIndex < 0 || !(t > .04 && t < .96)) return false;
+
+    var oldB = { x:target.b.x, y:target.b.y };
+    var oldLength = Number.isFinite(target.lengthCm) && target.lengthCm > 0 ? target.lengthCm : null;
+    var oldTargetId = target.id;
+    var newId = uid('w');
+    var firstLength = oldLength ? Math.max(1, Math.round(oldLength * t)) : null;
+    var secondLength = oldLength ? Math.max(1, oldLength - firstLength) : null;
+    if (oldLength && firstLength + secondLength !== oldLength) secondLength = oldLength - firstLength;
+
+    target.b = { x:point.x, y:point.y };
+    if (oldLength) target.lengthCm = firstLength;
+    target.derivedSplit = true;
+    target.parentWallId = target.parentWallId || oldTargetId;
+
+    var second = Object.assign({}, target, {
+      id:newId,
+      a:{ x:point.x, y:point.y },
+      b:oldB,
+      lengthCm:secondLength,
+      parentWallId:target.parentWallId || oldTargetId,
+      derivedSplit:true
+    });
+    walls.splice(targetIndex + 1, 0, second);
+    branch[branchEnd] = { x:point.x, y:point.y };
+
+    rawStrokes.forEach(function (stroke) {
+      if (!Array.isArray(stroke.wallIds)) return;
+      var pos = stroke.wallIds.indexOf(oldTargetId);
+      if (pos >= 0) stroke.wallIds.splice(pos + 1, 0, newId);
+    });
+
+    openings.forEach(function (opening) {
+      if (opening.wallId !== oldTargetId) return;
+      var pos = Number.isFinite(opening.position) ? opening.position : .5;
+      if (pos <= t) {
+        opening.position = Math.max(.01, Math.min(.99, pos / t));
+        syncOpeningMetricFromPosition(opening, target);
+      } else {
+        opening.wallId = newId;
+        opening.position = Math.max(.01, Math.min(.99, (pos - t) / (1 - t)));
+        syncOpeningMetricFromPosition(opening, second);
+      }
+    });
+
+    var duplicates = [];
+    notes.forEach(function (note) {
+      if (note.targetType !== 'wall' || note.targetId !== oldTargetId) return;
+      var copy = clone(note);
+      copy.id = uid('note');
+      copy.targetId = newId;
+      copy.targetKey = noteTargetKey('wall', newId);
+      copy.createdAt = new Date().toISOString();
+      copy.updatedAt = copy.createdAt;
+      duplicates.push(copy);
+    });
+    notes = notes.concat(duplicates);
+
+    rooms.forEach(function (room) {
+      if (!Array.isArray(room.wallIds)) return;
+      var pos = room.wallIds.indexOf(oldTargetId);
+      if (pos < 0) return;
+      if (room.wallIds.indexOf(newId) === -1) room.wallIds.splice(pos + 1, 0, newId);
+      room.faceKey = room.wallIds.slice().sort().join('|');
+    });
+
+    return true;
+  }
+
+  function autoRepairTJunctions() {
+    var repaired = 0;
+    for (var pass = 0; pass < 8; pass++) {
+      var candidates = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
+      if (!candidates.length) break;
+      var c = candidates[0];
+      var branch = walls.find(function (w) { return w.id === c.branchWallId; });
+      var target = walls.find(function (w) { return w.id === c.targetWallId; });
+      if (!branch || !target) break;
+
+      var h = distToSegment(branch[c.branchEnd], target.a, target.b);
+      if (!(h.t > .055 && h.t < .945) || h.distance > Math.max(8 / viewZoom, 4)) break;
+      var q = {
+        x:target.a.x + (target.b.x - target.a.x) * h.t,
+        y:target.a.y + (target.b.y - target.a.y) * h.t
+      };
+      if (!splitWallAtTJunction(target, branch, c.branchEnd, q, h.t)) break;
+      repaired++;
+    }
+
+    if (repaired) {
+      surfaceCache = null;
+      refreshWallInterventionLabels();
+      openings.forEach(function (o) { recalcOpeningPosition(o); });
+      toast(repaired === 1 ? 'Innesto a T riconosciuto ✓' : repaired + ' innesti a T riconosciuti ✓');
+    }
+    return repaired;
+  }
+
+  function applyClosedGeometryLive() {
+    var missing = walls.some(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
+    if (missing || !walls.length) return false;
+    try {
+      var result = solveFloorPlan(solverInput(), { mode:'normal', maxClosureGapCm:10 });
+      if (!result.success || !result.closure || !result.closure.closed || (result.errors || []).length) return false;
+      var solved = (result.walls || []).filter(function (w) { return w.status === 'solved' && w.a && w.b; });
+      if (!solved.length) return false;
+
+      var scale = Number.isFinite(liveScaleCmPerUnit) && liveScaleCmPerUnit > 0 ? liveScaleCmPerUnit : 1;
+      var oldBounds = solverPointBounds(walls);
+      var solvedUnits = solved.map(function (w) {
+        return Object.assign({}, w, {
+          a:{ x:w.a.x / scale, y:w.a.y / scale },
+          b:{ x:w.b.x / scale, y:w.b.y / scale }
+        });
+      });
+      var newBounds = solverPointBounds(solvedUnits);
+      if (!oldBounds || !newBounds) return false;
+      var oldCx = (oldBounds.minX + oldBounds.maxX) / 2;
+      var oldCy = (oldBounds.minY + oldBounds.maxY) / 2;
+      var newCx = (newBounds.minX + newBounds.maxX) / 2;
+      var newCy = (newBounds.minY + newBounds.maxY) / 2;
+      var byId = new Map(solvedUnits.map(function (w) { return [w.id, w]; }));
+
+      walls = walls.map(function (old) {
+        var sw = byId.get(old.id);
+        if (!sw) return old;
+        return Object.assign({}, old, {
+          a:{ x:sw.a.x + oldCx - newCx, y:sw.a.y + oldCy - newCy },
+          b:{ x:sw.b.x + oldCx - newCx, y:sw.b.y + oldCy - newCy },
+          lengthCm:sw.lengthCm
+        });
+      });
+      rawStrokes = [];
+      openings.forEach(function (o) { recalcOpeningPosition(o); });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function applyLiveProportion(wallId) {
+    var wall = walls.find(function (w) { return w.id === wallId; });
+    if (!wall || !Number.isFinite(wall.lengthCm) || wall.lengthCm <= 0) return;
+
+    var tolerance = Math.max(3 / viewZoom, .75);
+    var adjusted = applyMeasuredWallProportion(walls, wall.id, liveScaleCmPerUnit, tolerance);
+    walls = adjusted.walls;
+    liveScaleCmPerUnit = adjusted.scaleCmPerUnit;
+
+    autoRepairTJunctions();
+    var globallyClosed = applyClosedGeometryLive();
+    surfaceCache = null;
+    openings.forEach(function (o) { recalcOpeningPosition(o); });
+    refreshSurfaceCache();
+    if (adjusted.moved || globallyClosed) vibrate(12);
+  }
+
   function toggleOpeningCorner() {
     var opening = openings.find(function (o) { return o.id === currentOpeningId; });
     if (!opening) return;
@@ -1277,6 +1459,7 @@ import {
     rawStrokes = [];
     surfaceCache = null;
     wallMoveMode = null;
+    autoRepairTJunctions();
     openings.forEach(function (o) { recalcOpeningPosition(o); });
     refreshSurfaceCache();
     persistActive();
@@ -1358,6 +1541,7 @@ import {
       var wall = walls.find(function (w) { return w.id === selectedWallId; });
       if (wall) {
         wall.lengthCm = Math.round(meters * 100);
+        applyLiveProportion(wall.id);
         openings.filter(function (o) { return o.wallId === wall.id; }).forEach(function (o) {
           recalcOpeningPosition(o);
         });
