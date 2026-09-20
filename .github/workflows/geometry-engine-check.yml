@@ -1,0 +1,67 @@
+name: Geometry Engine Check
+
+on:
+  push:
+    branches: [ main, geometry-solver-integration ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  geometry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check frontend module syntax
+        run: |
+          cp js/app.js /tmp/ge360-app.mjs
+          node --check /tmp/ge360-app.mjs
+
+      - name: Geometry engine smoke tests
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { solveFloorPlan } from './geometry-engine/index.js';
+
+          const rect = (last = 300, openings = []) => ({
+            version: 4,
+            planId: 'smoke',
+            walls: [
+              { id:'w1', a:{x:0,y:0}, b:{x:200,y:5}, lengthCm:400 },
+              { id:'w2', a:{x:200,y:5}, b:{x:205,y:160}, lengthCm:300 },
+              { id:'w3', a:{x:205,y:160}, b:{x:5,y:155}, lengthCm:400 },
+              { id:'w4', a:{x:5,y:155}, b:{x:0,y:0}, lengthCm:last }
+            ],
+            openings
+          });
+
+          const good = solveFloorPlan(rect(), { mode:'normal' });
+          assert.equal(good.success, true);
+          assert.equal(good.closure.closed, true);
+          assert.equal(good.walls.find(w=>w.id==='w1').lengthCm, 400);
+          assert.ok(good.verification.maxLengthErrorCm < 1e-6);
+
+          const mismatch = solveFloorPlan(rect(298), { mode:'normal' });
+          assert.equal(mismatch.walls.find(w=>w.id==='w4').lengthCm, 298);
+          assert.equal(mismatch.closure.closed, false);
+          assert.ok(Math.abs(mismatch.closure.errorCm - 2) < 0.05);
+
+          const door = solveFloorPlan(rect(300, [
+            { id:'d1', type:'door', wallId:'w1', widthCm:80, referenceEnd:'a', offsetCm:120 }
+          ]));
+          const d1 = door.openings.find(o=>o.id==='d1');
+          assert.equal(d1.valid, true);
+          assert.ok(Math.abs(d1.centerFromACm - 160) < 1e-6);
+
+          console.log('GE360 geometry smoke tests OK');
+          NODE
+
+      - name: Verify engine stays isolated
+        run: |
+          if grep -RInE 'document\.|window\.|fetch\(|XMLHttpRequest|localStorage|navigator\.' geometry-engine --include='*.js'; then
+            echo "Geometry engine must not depend on UI/network APIs"
+            exit 1
+          fi
