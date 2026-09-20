@@ -30,7 +30,7 @@ app.add_middleware(
 
 
 class PlanPayload(BaseModel):
-    version: int = 3
+    version: int = 4
     kind: str = "ge360-rough-survey"
     planId: str
     name: str = "Rilievo"
@@ -38,6 +38,9 @@ class PlanPayload(BaseModel):
     rawStrokes: list = Field(default_factory=list)
     walls: list = Field(default_factory=list)
     openings: list = Field(default_factory=list)
+    rooms: list = Field(default_factory=list)
+    wallHeightM: float = 2.70
+    surfaces: dict | None = None
     summary: dict = Field(default_factory=dict)
 
 
