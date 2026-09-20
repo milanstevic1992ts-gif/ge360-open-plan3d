@@ -29,25 +29,21 @@
     <header class="topbar">
       <button id="backBtn" class="icon-btn" aria-label="Torna ai rilievi">‹</button>
       <div class="top-title"><input id="planName" value="Nuovo rilievo" maxlength="40" aria-label="Nome rilievo"></div>
-      <div class="top-actions"><button id="undoBtn" class="icon-btn" aria-label="Annulla">↶</button><button id="saveBtn" class="save-btn">SALVA</button></div>
+      <div class="top-actions">
+        <button id="undoBtn" class="icon-btn" aria-label="Annulla">↶</button>
+        <button id="toolsBtn" class="icon-btn tools-menu-btn hidden" aria-label="Apri strumenti">•••</button>
+        <button id="saveBtn" class="save-btn">SALVA</button>
+      </div>
     </header>
     <main id="stageWrap">
       <canvas id="stage"></canvas>
       <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
       <div id="statusPill" class="status-pill hidden"></div>
-      <button id="clearBtn" class="clear-btn hidden">Pulisci</button>
       <div class="view-controls" aria-label="Controlli vista">
         <button id="zoomOutBtn" aria-label="Zoom indietro">−</button>
         <button id="zoomResetBtn" class="zoom-level" aria-label="Ripristina vista">100%</button>
         <button id="zoomInBtn" aria-label="Zoom avanti">＋</button>
         <button id="rotateBtn" class="rotate-view" aria-label="Ruota planimetria di 90 gradi">↻ 90°</button>
-      </div>
-      <div class="work-actions">
-        <button id="notesBtn" class="notes-btn hidden">📝 APPUNTI</button>
-        <button id="presentBtn" class="present-btn hidden">👁 PRESENTA</button>
-        <button id="roomBtn" class="room-btn hidden">🏷 AMBIENTE</button>
-        <button id="surfacesBtn" class="surfaces-btn hidden">📐 SUPERFICI</button>
-        <button id="solvePlanBtn" class="solve-plan-btn hidden">✨ SISTEMA PIANTA</button>
       </div>
     </main>
     <footer class="bottom-bar">
@@ -58,6 +54,27 @@
       <button id="doneBtn" class="tool done"><span class="tool-icon">✓</span><span>FATTO</span></button>
     </footer>
   </section>
+
+  <div id="toolsBackdrop" class="tools-backdrop hidden">
+    <section class="tools-sheet" aria-label="Strumenti rilievo">
+      <div class="grabber"></div>
+      <div class="tools-head">
+        <div>
+          <div class="eyebrow dark">RILIEVO</div>
+          <h2>Strumenti</h2>
+        </div>
+        <button id="closeToolsBtn" class="round-btn light" aria-label="Chiudi strumenti">✕</button>
+      </div>
+      <div class="tools-grid">
+        <button id="notesBtn" class="tool-card notes-btn hidden"><span>📝</span><b>APPUNTI</b><small>Lavorazioni e note</small></button>
+        <button id="presentBtn" class="tool-card present-btn hidden"><span>👁</span><b>PRESENTA</b><small>Vista pulita</small></button>
+        <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
+        <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
+        <button id="solvePlanBtn" class="tool-card solve-plan-btn hidden"><span>✨</span><b>SISTEMA PIANTA</b><small>Correggi lo schizzo</small></button>
+        <button id="clearBtn" class="tool-card danger-tool hidden"><span>🧹</span><b>PULISCI</b><small>Cancella il disegno</small></button>
+      </div>
+    </section>
+  </div>
 
   <div id="sheetBackdrop" class="sheet-backdrop hidden">
     <section class="sheet">
