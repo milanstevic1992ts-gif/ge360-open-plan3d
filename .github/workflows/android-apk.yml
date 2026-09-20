@@ -77,9 +77,17 @@ jobs:
           cp "$APK" GE360-Rilievo-v1.1-unsigned.apk
           ls -lh GE360-Rilievo-v1.1-unsigned.apk
 
+      - name: Bundle Android signing tool
+        run: |
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -x "$BUILD_TOOLS/apksigner"
+          tar -C "$BUILD_TOOLS" -czf android-apksigner-linux.tar.gz apksigner lib/apksigner.jar
+
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
           name: GE360-Rilievo-v1.1-Unsigned
-          path: GE360-Rilievo-v1.1-unsigned.apk
+          path: |
+            GE360-Rilievo-v1.1-unsigned.apk
+            android-apksigner-linux.tar.gz
           retention-days: 3
