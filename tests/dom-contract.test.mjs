@@ -133,3 +133,12 @@ test('FATTO esegue un controllo completo prima di esportare',()=>{
   assert.match(app,/function openFinishCheck\(/);
   assert.match(app,/doneBtn'\)\.addEventListener\('click', openFinishCheck\)/);
 });
+
+
+test('T junction non trasforma una stima grafica in misura certa',()=>{
+  assert.match(app,/measurementSource = oldLength \? 'derived_t_split'/);
+  assert.match(app,/requiresMeasureVerification = !!oldLength/);
+  assert.match(app,/wall\.measurementSource = 'measured'/);
+  assert.match(app,/var derived = wall\.measurementSource === 'derived_t_split'/);
+  assert.match(app,/quote di segmenti T sono stimate dalla posizione dello schizzo/);
+});
