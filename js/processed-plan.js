@@ -63,6 +63,8 @@ function significantSource(plan) {
     interventions: plan.interventions || plan.notes || [],
     photos: plan.photos || [],
     takeoff: plan.takeoff || null,
+    siteId: plan.siteId || null,
+    site: plan.site || null,
     wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
     surfaces: plan.surfaces || plan.surfaceSummary || null
   };
@@ -130,17 +132,21 @@ export function buildProcessingPayload(plan) {
     interventions: plan.interventions || plan.notes || [],
     photos: plan.photos || [],
     takeoff: plan.takeoff || null,
+    siteId: plan.siteId || null,
+    site: plan.site || null,
     wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
     surfaces: plan.surfaces || plan.surfaceSummary || null,
     metadata: {
       client: 'ge360-open-plan3d',
-      schemaVersion: 3,
+      schemaVersion: 4,
       features: [
         'architectural-openings',
         'structured-interventions',
         'automatic-rooms',
         'linked-local-photos',
-        'progressive-takeoff'
+        'directional-photos',
+        'progressive-takeoff',
+        'worksite-archive'
       ]
     }
   };
