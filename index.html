@@ -55,6 +55,7 @@
           <button id="objectMeasureBtn">📏 MISURA</button>
           <button id="objectMoveBtn">↔ SPOSTA</button>
           <button id="objectWorkBtn">🛠 INTERVENTO</button>
+          <button id="objectPhotoBtn">📷 FOTO</button>
           <button id="objectSwingBtn" class="hidden">↻ APERTURA</button>
           <button id="objectDeleteBtn" class="danger">🗑 ELIMINA</button>
         </div>
@@ -161,6 +162,8 @@
         <button id="presentBtn" class="tool-card present-btn hidden"><span>👁</span><b>PRESENTA</b><small>Vista pulita</small></button>
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
         <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
+        <button id="photosBtn" class="tool-card photos-btn hidden"><span>📷</span><b>FOTO</b><small>Foto collegate alla pianta</small></button>
+        <button id="takeoffBtn" class="tool-card takeoff-btn hidden"><span>🧮</span><b>COMPUTO LIVE</b><small>Quantità dagli interventi</small></button>
         <button id="solvePlanBtn" class="tool-card solve-plan-btn hidden"><span>✨</span><b>SISTEMA PIANTA</b><small>Correggi lo schizzo</small></button>
         <button id="elaborateBtn" class="tool-card elaborate-btn hidden"><span>🧠</span><b>ELABORA RILIEVO</b><small>Crea planimetria professionale</small></button>
         <button id="clearBtn" class="tool-card danger-tool hidden"><span>🧹</span><b>PULISCI</b><small>Cancella il disegno</small></button>
@@ -245,6 +248,10 @@
       <label class="room-custom-label">Nome personalizzato
         <input id="roomCustomName" placeholder="Es. Studio, lavanderia...">
       </label>
+      <div class="room-photo-row">
+        <button id="roomPhotoBtn" class="secondary block">📷 FOTO AMBIENTE</button>
+        <span id="roomPhotoCount" class="room-photo-count">0 foto</span>
+      </div>
       <button id="saveRoomBtn" class="primary block">SALVA AMBIENTE ✓</button>
     </section>
   </div>
@@ -324,6 +331,33 @@
         <button id="rewriteNoteBtn" class="primary">✨ RISCRIVI NOTA</button>
       </div>
       <button id="deleteNoteBtn" class="delete-opening hidden">🗑 ELIMINA INTERVENTO</button>
+    </section>
+  </div>
+
+  <input id="photoInput" class="hidden" type="file" accept="image/*" capture="environment">
+
+  <div id="photosBackdrop" class="modal-backdrop hidden">
+    <section class="photo-gallery-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">DOCUMENTAZIONE</div><h2>Foto rilievo</h2></div>
+        <button id="closePhotosBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="photoGallerySummary" class="photo-gallery-summary"></div>
+      <div id="photoGallery" class="photo-gallery"></div>
+      <p class="photo-storage-note">Le foto restano sul dispositivo in IndexedDB. Nel rilievo vengono salvati solo riferimenti e metadati.</p>
+    </section>
+  </div>
+
+  <div id="takeoffBackdrop" class="modal-backdrop hidden">
+    <section class="takeoff-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">COMPUTO PROGRESSIVO</div><h2>Quantità di cantiere</h2></div>
+        <button id="closeTakeoffBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="takeoffSummary" class="takeoff-summary"></div>
+      <div id="takeoffRows" class="takeoff-rows"></div>
+      <div id="takeoffUnresolved" class="takeoff-unresolved hidden"></div>
+      <p class="takeoff-note">Quantità indicative ricavate dal rilievo e dagli interventi strutturati. Le righe ≈ dipendono da quote o superfici stimate.</p>
     </section>
   </div>
 
