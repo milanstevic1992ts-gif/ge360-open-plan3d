@@ -1709,16 +1709,29 @@ import { ProcessedPlanUI } from './processed-viewer.js';
     }
 
     var solved = solvedPresentationWalls();
+    var solvedClosed = !!(
+      solved.result &&
+      solved.result.success &&
+      solved.result.closure &&
+      solved.result.closure.closed &&
+      solved.walls &&
+      solved.walls.length
+    );
     var calculationWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
+    var displayWalls = solvedClosed ? clone(solved.walls) : clone(walls);
     var cache = calculateSurfaces(calculationWalls, rooms, wallHeightM);
     presentationModel = {
-      // La vista PRESENTA deve conservare esattamente la forma che l'utente
-      // vede nel rilievo. Il solver serve solo per i calcoli indicativi.
-      walls: clone(walls),
+      // Se il motore ha chiuso davvero il rilievo, PRESENTA mostra la versione
+      // proporzionata secondo le misure. Se non riesce a chiudere, non mostriamo
+      // una geometria parziale o spezzata: restiamo sullo schizzo originale.
+      walls: displayWalls,
       calculationWalls: calculationWalls,
       openings: clone(openings),
       rooms: clone(rooms),
-      surfaces: cache
+      surfaces: cache,
+      geometrySolved: solvedClosed,
+      closure: solved.result && solved.result.closure ? clone(solved.result.closure) : null,
+      repairedJoints: solved.result && solved.result.stats ? (solved.result.stats.repairedJoints || 0) : 0
     };
 
     var plan = currentPlan();
@@ -1731,7 +1744,10 @@ import { ProcessedPlanUI } from './processed-viewer.js';
       wallsM2: null,
       wallsCeilingM2: null
     };
-    $('presentationStamp').textContent = 'Rilievo indicativo · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
+    var geometryLabel = presentationModel.geometrySolved
+      ? 'PIANTA CHIUSA E PROPORZIONATA'
+      : 'RILIEVO DA VERIFICARE';
+    $('presentationStamp').textContent = geometryLabel + ' · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
     $('presentationSummary').innerHTML =
       presentationCard('PAVIMENTO', displayTotals.floorM2) +
       presentationCard('SOFFITTO', displayTotals.ceilingM2) +
