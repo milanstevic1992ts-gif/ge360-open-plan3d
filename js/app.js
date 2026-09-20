@@ -1,80 +1,259 @@
-(() => {
+(function () {
   'use strict';
 
-  const $ = (id) => document.getElementById(id);
-  const canvas = $('stage');
-  const ctx = canvas.getContext('2d');
-  const wrap = $('stageWrap');
+  var $ = function (id) { return document.getElementById(id); };
+  var canvas = $('stage');
+  var ctx = canvas.getContext('2d');
+  var wrap = $('stageWrap');
 
-  const STORAGE_KEY = 'ge360-rilievo-v2';
-  const MAX_HISTORY = 30;
+  var LIBRARY_KEY = 'ge360-rilievo-library-v3';
+  var SETTINGS_KEY = 'ge360-rilievo-settings-v1';
 
-  let mode = 'draw';
-  let rawStrokes = [];
-  let walls = [];
-  let openings = [];
-  let currentStroke = null;
-  let activePointerId = null;
-  let selectedWallId = null;
-  let currentOpeningId = null;
-  let sheetType = null;
-  let numberText = '';
-  let history = [];
-  let dpr = 1;
-  let idCounter = 1;
+  var library = [];
+  var settings = { serverUrl: '', apiKey: '' };
+  var activePlanId = null;
+  var mode = 'draw';
+  var rawStrokes = [];
+  var walls = [];
+  var openings = [];
+  var currentStroke = null;
+  var activePointerId = null;
+  var selectedWallId = null;
+  var currentOpeningId = null;
+  var sheetType = null;
+  var numberText = '';
+  var history = [];
+  var dpr = 1;
 
   function uid(prefix) {
-    return `${prefix}-${Date.now().toString(36)}-${idCounter++}`;
+    return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
   }
 
-  function vibrate(ms = 12) {
-    try { navigator.vibrate?.(ms); } catch (_) {}
+  function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+  function vibrate(ms) {
+    try { if (navigator.vibrate) navigator.vibrate(ms || 12); } catch (_) {}
   }
 
   function toast(message) {
-    const el = $('toast');
+    var el = $('toast');
     el.textContent = message;
     el.classList.remove('hidden');
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => el.classList.add('hidden'), 1300);
+    toast._t = setTimeout(function () { el.classList.add('hidden'); }, 1500);
   }
 
-  function snapshot() {
-    return JSON.stringify({ rawStrokes, walls, openings, idCounter });
+  function parse(raw, fallback) {
+    try {
+      var v = JSON.parse(raw);
+      return v == null ? fallback : v;
+    } catch (_) { return fallback; }
   }
 
-  function checkpoint() {
-    history.push(snapshot());
-    if (history.length > MAX_HISTORY) history.shift();
+  function saveLibrary() {
+    localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
   }
 
-  function restoreSnapshot(raw) {
-    const data = JSON.parse(raw);
-    rawStrokes = data.rawStrokes || [];
-    walls = data.walls || [];
-    openings = data.openings || [];
-    idCounter = data.idCounter || 1;
+  function loadAll() {
+    library = parse(localStorage.getItem(LIBRARY_KEY), []);
+    settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
+    renderDashboard();
+    updateServerBadge();
+  }
+
+  function currentPlan() {
+    for (var i = 0; i < library.length; i++) if (library[i].id === activePlanId) return library[i];
+    return null;
+  }
+
+  function summary(plan) {
+    var ws = plan ? (plan.walls || []) : walls;
+    var os = plan ? (plan.openings || []) : openings;
+    return {
+      walls: ws.length,
+      missing: ws.filter(function (w) { return !w.lengthCm; }).length,
+      doors: os.filter(function (o) { return o.type === 'door'; }).length,
+      windows: os.filter(function (o) { return o.type === 'window'; }).length
+    };
+  }
+
+  function persistActive(showToast) {
+    var plan = currentPlan();
+    if (!plan) return;
+    plan.name = ($('planName').value.trim() || 'Rilievo').slice(0, 40);
+    plan.updatedAt = new Date().toISOString();
+    plan.rawStrokes = clone(rawStrokes);
+    plan.walls = clone(walls);
+    plan.openings = clone(openings);
+    plan.summary = summary();
+    saveLibrary();
+    if (showToast) toast('Salvato ✓');
+  }
+
+  function showDashboard() {
+    closeSheet();
+    $('editor').classList.add('hidden');
+    $('dashboard').classList.remove('hidden');
+    activePlanId = null;
+    renderDashboard();
+  }
+
+  function showEditor() {
+    $('dashboard').classList.add('hidden');
+    $('editor').classList.remove('hidden');
+    requestAnimationFrame(resize);
+  }
+
+  function newPlan() {
+    var now = new Date().toISOString();
+    var plan = {
+      id: uid('plan'),
+      name: 'Rilievo ' + new Date().toLocaleDateString('it-IT'),
+      createdAt: now,
+      updatedAt: now,
+      rawStrokes: [],
+      walls: [],
+      openings: []
+    };
+    library.unshift(plan);
+    saveLibrary();
+    openPlan(plan.id);
+  }
+
+  function openPlan(id) {
+    var plan = library.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    activePlanId = id;
+    rawStrokes = clone(plan.rawStrokes || []);
+    walls = clone(plan.walls || []);
+    openings = clone(plan.openings || []);
+    history = [];
     currentStroke = null;
     selectedWallId = null;
     currentOpeningId = null;
-    closeSheet();
-    autoSave();
+    $('planName').value = plan.name || 'Rilievo';
+    setMode('draw', false);
+    showEditor();
     updateUI();
     render();
   }
 
+  function deletePlan(id) {
+    var plan = library.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    if (!confirm('Eliminare "' + (plan.name || 'Rilievo') + '"?')) return;
+    library = library.filter(function (p) { return p.id !== id; });
+    saveLibrary();
+    renderDashboard();
+  }
+
+  function makeButton(label, cls, fn) {
+    var b = document.createElement('button');
+    b.textContent = label;
+    b.className = cls;
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function renderDashboard() {
+    var grid = $('planGrid');
+    grid.innerHTML = '';
+    $('emptyLibrary').classList.toggle('hidden', library.length > 0);
+    library.sort(function (a, b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+
+    library.forEach(function (plan) {
+      var card = document.createElement('article');
+      card.className = 'plan-card';
+
+      var preview = document.createElement('div');
+      preview.className = 'plan-preview';
+      var pc = document.createElement('canvas');
+      preview.appendChild(pc);
+
+      var info = document.createElement('div');
+      info.className = 'plan-info';
+      var s = summary(plan);
+      var date = plan.updatedAt ? new Date(plan.updatedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      var h3 = document.createElement('h3');
+      h3.textContent = plan.name || 'Rilievo';
+      var meta = document.createElement('div');
+      meta.className = 'plan-meta';
+      meta.textContent = s.walls + ' muri · ' + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
+
+      var actions = document.createElement('div');
+      actions.className = 'plan-actions';
+      actions.appendChild(makeButton('APRI', 'open-plan', function () { openPlan(plan.id); }));
+      actions.appendChild(makeButton('DEBIAN', 'send-plan', function () { sendPlan(plan.id); }));
+      actions.appendChild(makeButton('🗑', 'delete-plan', function () { deletePlan(plan.id); }));
+
+      info.appendChild(h3);
+      info.appendChild(meta);
+      info.appendChild(actions);
+      card.appendChild(preview);
+      card.appendChild(info);
+      grid.appendChild(card);
+      requestAnimationFrame(function () { drawPreview(pc, plan); });
+    });
+  }
+
+  function drawPreview(c, plan) {
+    var rect = c.getBoundingClientRect();
+    var ratio = Math.min(2, window.devicePixelRatio || 1);
+    c.width = Math.max(1, Math.round(rect.width * ratio));
+    c.height = Math.max(1, Math.round(rect.height * ratio));
+    var pctx = c.getContext('2d');
+    pctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    pctx.fillStyle = '#f8fafc';
+    pctx.fillRect(0, 0, rect.width, rect.height);
+
+    var ws = plan.walls || [];
+    if (!ws.length) return;
+
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    ws.forEach(function (w) {
+      minX = Math.min(minX, w.a.x, w.b.x);
+      minY = Math.min(minY, w.a.y, w.b.y);
+      maxX = Math.max(maxX, w.a.x, w.b.x);
+      maxY = Math.max(maxY, w.a.y, w.b.y);
+    });
+    var bw = Math.max(1, maxX - minX);
+    var bh = Math.max(1, maxY - minY);
+    var scale = Math.min((rect.width - 30) / bw, (rect.height - 30) / bh);
+    var ox = (rect.width - bw * scale) / 2 - minX * scale;
+    var oy = (rect.height - bh * scale) / 2 - minY * scale;
+
+    pctx.strokeStyle = '#0f172a';
+    pctx.lineWidth = 5;
+    pctx.lineCap = 'round';
+    ws.forEach(function (w) {
+      pctx.beginPath();
+      pctx.moveTo(w.a.x * scale + ox, w.a.y * scale + oy);
+      pctx.lineTo(w.b.x * scale + ox, w.b.y * scale + oy);
+      pctx.stroke();
+    });
+  }
+
+  function checkpoint() {
+    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings }));
+    if (history.length > 30) history.shift();
+  }
+
   function undo() {
-    if (!history.length) {
-      toast('Niente da annullare');
-      return;
-    }
-    restoreSnapshot(history.pop());
+    if (!history.length) return toast('Niente da annullare');
+    var data = JSON.parse(history.pop());
+    rawStrokes = data.rawStrokes || [];
+    walls = data.walls || [];
+    openings = data.openings || [];
+    closeSheet();
+    persistActive();
+    updateUI();
+    render();
     vibrate(20);
   }
 
-  function pointFromEvent(e) {
-    const r = canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top, t: Date.now() };
+  function point(e) {
+    var r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
   function dist(a, b) {
@@ -82,172 +261,128 @@
   }
 
   function distToSegment(p, a, b) {
-    const vx = b.x - a.x;
-    const vy = b.y - a.y;
-    const len2 = vx * vx + vy * vy;
-    if (!len2) return { distance: dist(p, a), t: 0, point: { x: a.x, y: a.y } };
-    let t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
+    var vx = b.x - a.x, vy = b.y - a.y;
+    var len2 = vx * vx + vy * vy;
+    if (!len2) return { distance: dist(p, a), t: 0 };
+    var t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
     t = Math.max(0, Math.min(1, t));
-    const q = { x: a.x + vx * t, y: a.y + vy * t };
-    return { distance: dist(p, q), t, point: q };
+    var q = { x: a.x + vx * t, y: a.y + vy * t };
+    return { distance: dist(p, q), t: t };
   }
 
   function pathLength(points) {
-    let total = 0;
-    for (let i = 1; i < points.length; i++) total += dist(points[i - 1], points[i]);
+    var total = 0;
+    for (var i = 1; i < points.length; i++) total += dist(points[i - 1], points[i]);
     return total;
   }
 
   function rdp(points, epsilon) {
     if (points.length <= 2) return points.slice();
-    const first = points[0];
-    const last = points[points.length - 1];
-    let index = -1;
-    let max = 0;
-    for (let i = 1; i < points.length - 1; i++) {
-      const d = distToSegment(points[i], first, last).distance;
-      if (d > max) { index = i; max = d; }
+    var first = points[0], last = points[points.length - 1], index = -1, max = 0;
+    for (var i = 1; i < points.length - 1; i++) {
+      var d = distToSegment(points[i], first, last).distance;
+      if (d > max) { max = d; index = i; }
     }
     if (max > epsilon && index > 0) {
-      const left = rdp(points.slice(0, index + 1), epsilon);
-      const right = rdp(points.slice(index), epsilon);
+      var left = rdp(points.slice(0, index + 1), epsilon);
+      var right = rdp(points.slice(index), epsilon);
       return left.slice(0, -1).concat(right);
     }
     return [first, last];
   }
 
-  function removeTinySegments(points, minLen = 32) {
-    if (points.length <= 2) return points;
-    const out = [points[0]];
-    for (let i = 1; i < points.length - 1; i++) {
-      if (dist(out[out.length - 1], points[i]) >= minLen) out.push(points[i]);
+  function simplify(points) {
+    var out = points;
+    for (var eps = 10; eps <= 34; eps += 4) {
+      out = rdp(points, eps);
+      if (out.length <= 14) break;
     }
-    const last = points[points.length - 1];
-    if (dist(out[out.length - 1], last) < minLen && out.length > 1) out[out.length - 1] = last;
-    else out.push(last);
+    if (out.length >= 3 && dist(out[0], out[out.length - 1]) < 58) out[out.length - 1] = { x: out[0].x, y: out[0].y };
     return out;
   }
 
-  function simplifyStroke(points) {
-    let simplified = points;
-    for (let eps = 12; eps <= 38; eps += 4) {
-      simplified = rdp(points, eps);
-      if (simplified.length <= 18) break;
-    }
-    simplified = removeTinySegments(simplified, 30);
-
-    if (simplified.length >= 3 && dist(simplified[0], simplified[simplified.length - 1]) < 58) {
-      simplified[simplified.length - 1] = { ...simplified[0] };
-    }
-    return simplified;
-  }
-
-  function createWallsFromStroke(stroke) {
-    const created = [];
-    for (let i = 1; i < stroke.simplified.length; i++) {
-      const a = stroke.simplified[i - 1];
-      const b = stroke.simplified[i];
-      if (dist(a, b) < 28) continue;
-      const wall = {
-        id: uid('w'),
-        strokeId: stroke.id,
-        order: i - 1,
-        a: { x: a.x, y: a.y },
-        b: { x: b.x, y: b.y },
-        lengthCm: null
-      };
-      walls.push(wall);
-      created.push(wall.id);
-    }
-    stroke.wallIds = created;
-  }
-
   function commitStroke() {
-    const points = currentStroke;
+    var points = currentStroke;
     currentStroke = null;
     activePointerId = null;
-    if (!points || points.length < 3 || pathLength(points) < 70) {
-      render();
-      return;
-    }
+    if (!points || points.length < 2 || pathLength(points) < 45) { render(); return; }
 
-    const simplified = simplifyStroke(points);
-    if (simplified.length < 2) return;
+    var simp = simplify(points);
+    if (simp.length < 2) return;
 
     checkpoint();
-    const stroke = {
+    var stroke = {
       id: uid('s'),
-      raw: points.map(p => ({ x: p.x, y: p.y })),
-      simplified: simplified.map(p => ({ x: p.x, y: p.y })),
+      raw: points.map(function (p) { return { x: p.x, y: p.y }; }),
+      simplified: simp.map(function (p) { return { x: p.x, y: p.y }; }),
       wallIds: []
     };
     rawStrokes.push(stroke);
-    createWallsFromStroke(stroke);
-    autoSave();
+
+    for (var i = 1; i < simp.length; i++) {
+      if (dist(simp[i - 1], simp[i]) < 24) continue;
+      var wall = {
+        id: uid('w'),
+        strokeId: stroke.id,
+        a: { x: simp[i - 1].x, y: simp[i - 1].y },
+        b: { x: simp[i].x, y: simp[i].y },
+        lengthCm: null
+      };
+      walls.push(wall);
+      stroke.wallIds.push(wall.id);
+    }
+
+    persistActive();
     updateUI();
     render();
-    vibrate(22);
-    toast(`${stroke.wallIds.length} lati riconosciuti`);
+    vibrate(25);
+
+    if (stroke.wallIds.length) {
+      toast(stroke.wallIds.length === 1 ? 'Inserisci subito la misura' : stroke.wallIds.length + ' lati: inserisci le misure');
+      openNextMissing(stroke.wallIds[0]);
+    }
   }
 
-  function nearestWall(p, threshold = 44) {
-    let best = null;
-    for (const wall of walls) {
-      const hit = distToSegment(p, wall.a, wall.b);
-      if (hit.distance <= threshold && (!best || hit.distance < best.distance)) {
-        best = { wall, ...hit };
-      }
-    }
+  function nearestWall(p) {
+    var best = null;
+    walls.forEach(function (wall) {
+      var h = distToSegment(p, wall.a, wall.b);
+      if (h.distance <= 55 && (!best || h.distance < best.distance)) best = { wall: wall, distance: h.distance, t: h.t };
+    });
     return best;
   }
 
-  function setMode(next) {
+  function setMode(next, announce) {
     mode = next;
-    for (const [id, value] of [['drawBtn','draw'],['doorBtn','door'],['windowBtn','window']]) {
-      $(id).classList.toggle('active', value === mode);
-    }
-    const messages = {
-      draw: 'Disegna col dito',
-      door: 'Tocca un muro dove c’è la porta',
-      window: 'Tocca un muro dove c’è la finestra'
-    };
-    toast(messages[mode]);
-    vibrate();
+    [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window']].forEach(function (pair) {
+      $(pair[0]).classList.toggle('active', pair[1] === mode);
+    });
+    if (announce !== false) toast(next === 'draw' ? 'Disegna col dito' : next === 'door' ? 'Tocca il muro della porta' : 'Tocca il muro della finestra');
   }
 
   function placeOpening(p) {
-    const hit = nearestWall(p, 52);
-    if (!hit) {
-      vibrate(70);
-      toast('Tocca più vicino a un muro');
-      return;
-    }
+    var hit = nearestWall(p);
+    if (!hit) return toast('Tocca più vicino a un muro');
     checkpoint();
-    const opening = {
+    var opening = {
       id: uid(mode === 'door' ? 'd' : 'f'),
       type: mode,
       wallId: hit.wall.id,
-      position: Math.max(0.06, Math.min(0.94, hit.t)),
+      position: Math.max(.06, Math.min(.94, hit.t)),
       widthCm: mode === 'door' ? 80 : 120
     };
     openings.push(opening);
     currentOpeningId = opening.id;
     numberText = (opening.widthCm / 100).toFixed(2).replace('.', ',');
     openSheet('opening');
-    autoSave();
+    persistActive();
     render();
-    vibrate(24);
   }
 
-  function openNextMissingMeasure(preferredId = null) {
-    let target = preferredId ? walls.find(w => w.id === preferredId) : null;
-    if (!target) target = walls.find(w => !w.lengthCm);
-    if (!target) {
-      selectedWallId = null;
-      closeSheet();
-      toast('Tutte le misure sono inserite ✓');
-      return;
-    }
+  function openNextMissing(preferredId) {
+    var target = preferredId ? walls.find(function (w) { return w.id === preferredId && !w.lengthCm; }) : null;
+    if (!target) target = walls.find(function (w) { return !w.lengthCm; });
+    if (!target) { selectedWallId = null; closeSheet(); return toast('Misure complete ✓'); }
     selectedWallId = target.id;
     numberText = target.lengthCm ? (target.lengthCm / 100).toFixed(2).replace('.', ',') : '';
     openSheet('wall');
@@ -258,11 +393,11 @@
     sheetType = type;
     $('sheetBackdrop').classList.remove('hidden');
     if (type === 'wall') {
-      const idx = walls.findIndex(w => w.id === selectedWallId);
-      $('sheetKicker').textContent = `MISURA MURO ${idx + 1} DI ${walls.length}`;
+      var idx = walls.findIndex(function (w) { return w.id === selectedWallId; });
+      $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
     } else {
-      const o = openings.find(x => x.id === currentOpeningId);
-      $('sheetKicker').textContent = o?.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
+      var o = openings.find(function (x) { return x.id === currentOpeningId; });
+      $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
     }
     updateSheetValue();
   }
@@ -275,38 +410,29 @@
   }
 
   function updateSheetValue() {
-    $('sheetValue').innerHTML = `${numberText || '0,00'} <span>m</span>`;
+    $('sheetValue').innerHTML = (numberText || '0,00') + ' <span>m</span>';
   }
 
   function keypad(key) {
-    vibrate(7);
     if (key === '⌫') numberText = numberText.slice(0, -1);
     else if (key === ',') {
-      if (!numberText.includes(',')) numberText += numberText ? ',' : '0,';
+      if (numberText.indexOf(',') === -1) numberText += numberText ? ',' : '0,';
     } else if (numberText.length < 6) numberText += key;
     updateSheetValue();
   }
 
-  function parseMeters() {
-    const value = Number(numberText.replace(',', '.'));
-    return Number.isFinite(value) && value > 0 ? value : null;
-  }
-
   function confirmSheet() {
-    const meters = parseMeters();
-    if (!meters) {
-      vibrate(80);
-      toast('Inserisci una misura');
-      return;
-    }
+    var meters = Number(numberText.replace(',', '.'));
+    if (!Number.isFinite(meters) || meters <= 0) return toast('Inserisci una misura');
 
     if (sheetType === 'wall') {
       checkpoint();
-      const wall = walls.find(w => w.id === selectedWallId);
+      var wall = walls.find(function (w) { return w.id === selectedWallId; });
       if (wall) wall.lengthCm = Math.round(meters * 100);
-      const justDone = selectedWallId;
-      autoSave();
-      const next = walls.find(w => !w.lengthCm && w.id !== justDone);
+      var strokeId = wall ? wall.strokeId : null;
+      var next = walls.find(function (w) { return w.strokeId === strokeId && !w.lengthCm && w.id !== selectedWallId; });
+      if (!next) next = walls.find(function (w) { return !w.lengthCm && w.id !== selectedWallId; });
+      persistActive();
       if (next) {
         selectedWallId = next.id;
         numberText = '';
@@ -316,142 +442,180 @@
         closeSheet();
         toast('Misure completate ✓');
       }
-    } else if (sheetType === 'opening') {
+    } else {
       checkpoint();
-      const opening = openings.find(o => o.id === currentOpeningId);
-      if (opening) opening.widthCm = Math.round(meters * 100);
+      var op = openings.find(function (o) { return o.id === currentOpeningId; });
+      if (op) op.widthCm = Math.round(meters * 100);
       currentOpeningId = null;
-      autoSave();
+      persistActive();
       closeSheet();
     }
     updateUI();
     render();
-    vibrate(28);
   }
 
   function later() {
     if (sheetType === 'wall') {
-      const current = selectedWallId;
-      const idx = walls.findIndex(w => w.id === current);
-      const rest = walls.slice(idx + 1).concat(walls.slice(0, idx));
-      const next = rest.find(w => !w.lengthCm && w.id !== current);
-      if (next) {
-        selectedWallId = next.id;
-        numberText = '';
-        openSheet('wall');
-      } else {
-        selectedWallId = null;
-        closeSheet();
-      }
+      selectedWallId = null;
+      closeSheet();
     } else {
       currentOpeningId = null;
       closeSheet();
     }
   }
 
-  function autoSave(showToast = false) {
-    const data = exportData();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    if (showToast) toast('Salvato sul telefono ✓');
-  }
-
-  function exportData() {
+  function planPayload(plan) {
     return {
-      version: 2,
+      version: 3,
       kind: 'ge360-rough-survey',
-      updatedAt: new Date().toISOString(),
-      viewport: { width: wrap.clientWidth, height: wrap.clientHeight },
-      rawStrokes,
-      walls,
-      openings,
-      summary: {
-        strokes: rawStrokes.length,
-        walls: walls.length,
-        measuredWalls: walls.filter(w => w.lengthCm).length,
-        missingMeasures: walls.filter(w => !w.lengthCm).length,
-        doors: openings.filter(o => o.type === 'door').length,
-        windows: openings.filter(o => o.type === 'window').length
-      }
+      planId: plan.id,
+      name: plan.name || 'Rilievo',
+      updatedAt: plan.updatedAt || new Date().toISOString(),
+      rawStrokes: plan.rawStrokes || [],
+      walls: plan.walls || [],
+      openings: plan.openings || [],
+      summary: summary(plan)
     };
   }
 
+  function openSettings() {
+    $('serverUrl').value = settings.serverUrl || '';
+    $('apiKey').value = settings.apiKey || '';
+    $('settingsBackdrop').classList.remove('hidden');
+  }
+
+  function closeSettings() {
+    $('settingsBackdrop').classList.add('hidden');
+  }
+
+  function saveSettings() {
+    settings.serverUrl = $('serverUrl').value.trim().replace(/\/$/, '');
+    settings.apiKey = $('apiKey').value.trim();
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    updateServerBadge();
+    closeSettings();
+    toast('Collegamento salvato ✓');
+  }
+
+  function updateServerBadge() {
+    var ok = !!(settings.serverUrl && settings.apiKey);
+    $('serverBadge').className = 'server-badge ' + (ok ? 'online' : 'offline');
+    $('serverBadge').textContent = ok ? '● Debian configurato' : '● Debian non collegato';
+  }
+
+  async function testServer() {
+    var url = $('serverUrl').value.trim().replace(/\/$/, '');
+    var key = $('apiKey').value.trim();
+    if (!url || !key) return toast('Inserisci URL e API Key');
+    toast('Test collegamento…');
+    try {
+      var res = await fetch(url + '/health', { headers: { 'X-GE360-API-Key': key } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      toast('Debian raggiungibile ✓');
+    } catch (e) {
+      toast('Connessione fallita: ' + e.message);
+    }
+  }
+
+  async function sendPlan(id) {
+    var plan = library.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    if (!settings.serverUrl || !settings.apiKey) {
+      openSettings();
+      return toast('Configura prima il Debian');
+    }
+    toast('Invio al planner…');
+    try {
+      var res = await fetch(settings.serverUrl + '/plans/refine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-GE360-API-Key': settings.apiKey },
+        body: JSON.stringify(planPayload(plan))
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      plan.backend = { sentAt: new Date().toISOString(), status: 'sent' };
+      saveLibrary();
+      renderDashboard();
+      toast('Inviato al Debian ✓');
+    } catch (e) {
+      toast('Errore: ' + e.message);
+    }
+  }
+
   function exportJson() {
-    if (!walls.length) {
-      toast('Prima fai uno schizzo');
-      return;
-    }
-    const missing = walls.filter(w => !w.lengthCm).length;
+    persistActive();
+    var plan = currentPlan();
+    if (!plan || !plan.walls || !plan.walls.length) return toast('Prima fai uno schizzo');
+    var missing = plan.walls.filter(function (w) { return !w.lengthCm; }).length;
     if (missing) {
-      toast(`Mancano ${missing} misure`);
-      openNextMissingMeasure();
-      return;
+      toast('Mancano ' + missing + ' misure');
+      return openNextMissing();
     }
-    autoSave();
-    const blob = new Blob([JSON.stringify(exportData(), null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    var blob = new Blob([JSON.stringify(planPayload(plan), null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
     a.href = url;
-    a.download = `GE360-rilievo-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
+    a.download = 'GE360-' + (plan.name || 'rilievo').replace(/[^a-z0-9_-]+/gi, '-') + '.json';
     a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast('Rilievo pronto ✓');
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   function clearAll() {
-    if (!confirm('Cancellare tutto il rilievo?')) return;
+    if (!confirm('Cancellare tutto il disegno di questo rilievo?')) return;
     checkpoint();
     rawStrokes = [];
     walls = [];
     openings = [];
-    selectedWallId = null;
-    currentOpeningId = null;
-    autoSave();
+    persistActive();
     updateUI();
     render();
   }
 
   function updateUI() {
-    const hasData = walls.length > 0;
-    $('emptyHint').classList.toggle('hidden', hasData || !!currentStroke);
-    $('statusPill').classList.toggle('hidden', !hasData);
-    $('clearBtn').classList.toggle('hidden', !hasData);
-    const missing = walls.filter(w => !w.lengthCm).length;
-    $('statusPill').textContent = `${walls.length} muri · ${missing ? `${missing} da misurare` : 'misure complete ✓'}`;
-    $('measureLabel').textContent = missing ? `MISURE ${missing}` : 'MISURE ✓';
+    var has = walls.length > 0;
+    $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
+    $('statusPill').classList.toggle('hidden', !has);
+    $('clearBtn').classList.toggle('hidden', !has);
+    var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
+    $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
+    $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
   }
 
-  function drawPolyline(points, color, width, dash = []) {
+  function drawPolyline(points, color, width) {
     if (!points || points.length < 2) return;
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = width;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.setLineDash(dash);
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    for (var i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
     ctx.stroke();
     ctx.restore();
   }
 
-  function formatLength(cm) {
-    return cm ? `${(cm / 100).toFixed(2).replace('.', ',')} m` : '?';
+  function roundRect(x, y, w, h, r) {
+    var rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
   }
 
-  function drawMeasureLabel(wall) {
-    const x = (wall.a.x + wall.b.x) / 2;
-    const y = (wall.a.y + wall.b.y) / 2;
-    const text = formatLength(wall.lengthCm);
+  function drawMeasure(wall) {
+    var x = (wall.a.x + wall.b.x) / 2;
+    var y = (wall.a.y + wall.b.y) / 2;
+    var text = wall.lengthCm ? (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
     ctx.save();
     ctx.font = '900 13px system-ui';
-    const width = Math.max(42, ctx.measureText(text).width + 16);
-    ctx.fillStyle = wall.lengthCm ? '#ffffff' : '#fef3c7';
+    var width = Math.max(42, ctx.measureText(text).width + 16);
+    ctx.fillStyle = wall.lengthCm ? '#fff' : '#fef3c7';
     ctx.strokeStyle = wall.lengthCm ? '#cbd5e1' : '#f59e0b';
     ctx.lineWidth = 2;
-    roundRect(ctx, x - width / 2, y - 18, width, 36, 12);
+    roundRect(x - width / 2, y - 18, width, 36, 12);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = '#0f172a';
@@ -461,31 +625,20 @@
     ctx.restore();
   }
 
-  function roundRect(context, x, y, w, h, r) {
-    const rr = Math.min(r, w / 2, h / 2);
-    context.beginPath();
-    context.moveTo(x + rr, y);
-    context.arcTo(x + w, y, x + w, y + h, rr);
-    context.arcTo(x + w, y + h, x, y + h, rr);
-    context.arcTo(x, y + h, x, y, rr);
-    context.arcTo(x, y, x + w, y, rr);
-    context.closePath();
-  }
-
   function drawOpening(opening) {
-    const wall = walls.find(w => w.id === opening.wallId);
+    var wall = walls.find(function (w) { return w.id === opening.wallId; });
     if (!wall) return;
-    const x = wall.a.x + (wall.b.x - wall.a.x) * opening.position;
-    const y = wall.a.y + (wall.b.y - wall.a.y) * opening.position;
+    var x = wall.a.x + (wall.b.x - wall.a.x) * opening.position;
+    var y = wall.a.y + (wall.b.y - wall.a.y) * opening.position;
     ctx.save();
     ctx.fillStyle = opening.type === 'door' ? '#22c55e' : '#06b6d4';
-    ctx.strokeStyle = '#ffffff';
+    ctx.strokeStyle = '#fff';
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.arc(x, y, 15, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#fff';
     ctx.font = '900 12px system-ui';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -494,15 +647,15 @@
   }
 
   function render() {
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
+    if ($('editor').classList.contains('hidden')) return;
+    var w = canvas.clientWidth, h = canvas.clientHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, w, h);
 
-    for (const stroke of rawStrokes) drawPolyline(stroke.raw, '#cbd5e1', 3);
-    for (const wall of walls) {
+    rawStrokes.forEach(function (s) { drawPolyline(s.raw, '#cbd5e1', 3); });
+    walls.forEach(function (wall) {
       ctx.save();
       ctx.strokeStyle = wall.id === selectedWallId ? '#2563eb' : '#0f172a';
       ctx.lineWidth = wall.id === selectedWallId ? 10 : 8;
@@ -512,89 +665,75 @@
       ctx.lineTo(wall.b.x, wall.b.y);
       ctx.stroke();
       ctx.restore();
-    }
-    for (const wall of walls) drawMeasureLabel(wall);
-    for (const opening of openings) drawOpening(opening);
+    });
+    walls.forEach(drawMeasure);
+    openings.forEach(drawOpening);
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
   }
 
   function resize() {
-    const rect = canvas.getBoundingClientRect();
+    if ($('editor').classList.contains('hidden')) return;
+    var rect = canvas.getBoundingClientRect();
     dpr = Math.min(3, window.devicePixelRatio || 1);
     canvas.width = Math.round(rect.width * dpr);
     canvas.height = Math.round(rect.height * dpr);
     render();
   }
 
-  function loadSaved() {
-    try {
-      const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-      if (!data) return;
-      rawStrokes = Array.isArray(data.rawStrokes) ? data.rawStrokes : [];
-      walls = Array.isArray(data.walls) ? data.walls : [];
-      openings = Array.isArray(data.openings) ? data.openings : [];
-    } catch (_) {}
-  }
-
-  canvas.addEventListener('pointerdown', (e) => {
+  canvas.addEventListener('pointerdown', function (e) {
     e.preventDefault();
-    const p = pointFromEvent(e);
+    var p = point(e);
     if (mode === 'draw') {
       activePointerId = e.pointerId;
-      canvas.setPointerCapture?.(e.pointerId);
+      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
       currentStroke = [p];
       $('emptyHint').classList.add('hidden');
       render();
-    } else if (mode === 'door' || mode === 'window') {
+    } else {
       placeOpening(p);
     }
   });
 
-  canvas.addEventListener('pointermove', (e) => {
+  canvas.addEventListener('pointermove', function (e) {
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
-    const p = pointFromEvent(e);
-    const last = currentStroke[currentStroke.length - 1];
+    var p = point(e);
+    var last = currentStroke[currentStroke.length - 1];
     if (dist(last, p) >= 3) currentStroke.push(p);
     render();
   });
 
-  canvas.addEventListener('pointerup', (e) => {
+  canvas.addEventListener('pointerup', function (e) {
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
-    const p = pointFromEvent(e);
-    const last = currentStroke[currentStroke.length - 1];
-    if (dist(last, p) > 2) currentStroke.push(p);
+    var p = point(e);
+    if (dist(currentStroke[currentStroke.length - 1], p) > 2) currentStroke.push(p);
     commitStroke();
   });
 
-  canvas.addEventListener('pointercancel', () => {
-    currentStroke = null;
-    activePointerId = null;
-    updateUI();
-    render();
-  });
-
-  $('drawBtn').addEventListener('click', () => setMode('draw'));
-  $('doorBtn').addEventListener('click', () => setMode('door'));
-  $('windowBtn').addEventListener('click', () => setMode('window'));
-  $('measureBtn').addEventListener('click', () => openNextMissingMeasure());
+  $('newPlanBtn').addEventListener('click', newPlan);
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('closeSettingsBtn').addEventListener('click', closeSettings);
+  $('saveSettingsBtn').addEventListener('click', saveSettings);
+  $('testServerBtn').addEventListener('click', testServer);
+  $('backBtn').addEventListener('click', function () { persistActive(); showDashboard(); });
+  $('drawBtn').addEventListener('click', function () { setMode('draw'); });
+  $('doorBtn').addEventListener('click', function () { setMode('door'); });
+  $('windowBtn').addEventListener('click', function () { setMode('window'); });
+  $('measureBtn').addEventListener('click', function () { openNextMissing(); });
   $('doneBtn').addEventListener('click', exportJson);
   $('undoBtn').addEventListener('click', undo);
-  $('saveBtn').addEventListener('click', () => autoSave(true));
+  $('saveBtn').addEventListener('click', function () { persistActive(true); });
   $('clearBtn').addEventListener('click', clearAll);
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
-  document.querySelectorAll('[data-key]').forEach(btn => btn.addEventListener('click', () => keypad(btn.dataset.key)));
-  $('sheetBackdrop').addEventListener('click', (e) => {
-    if (e.target === $('sheetBackdrop')) later();
-  });
-
+  $('planName').addEventListener('change', function () { persistActive(); });
+  document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
+  $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
+  $('settingsBackdrop').addEventListener('click', function (e) { if (e.target === $('settingsBackdrop')) closeSettings(); });
   window.addEventListener('resize', resize);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) autoSave(); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden && activePlanId) persistActive(); });
 
-  loadSaved();
-  resize();
-  updateUI();
-  render();
+  loadAll();
+  showDashboard();
 })();
