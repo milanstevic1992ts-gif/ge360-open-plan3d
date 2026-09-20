@@ -31,6 +31,7 @@
       <div class="top-title"><input id="planName" value="Nuovo rilievo" maxlength="40" aria-label="Nome rilievo"></div>
       <div class="top-actions">
         <button id="undoBtn" class="icon-btn" aria-label="Annulla">↶</button>
+        <button id="redoBtn" class="icon-btn" aria-label="Ripristina">↷</button>
         <button id="toolsBtn" class="icon-btn tools-menu-btn hidden" aria-label="Apri strumenti">•••</button>
         <button id="saveBtn" class="save-btn">SALVA</button>
       </div>
@@ -44,6 +45,20 @@
       <canvas id="stage"></canvas>
       <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
       <div id="statusPill" class="status-pill hidden"></div>
+      <div id="stageModeToggle" class="stage-mode-toggle hidden" aria-label="Vista planimetria">
+        <button id="surveyViewBtn" class="active">RILIEVO</button>
+        <button id="worksViewBtn">INTERVENTI</button>
+      </div>
+      <div id="objectActionBar" class="object-action-bar hidden" aria-label="Azioni elemento">
+        <div id="objectActionLabel" class="object-action-label">Elemento</div>
+        <div class="object-action-buttons">
+          <button id="objectMeasureBtn">📏 MISURA</button>
+          <button id="objectMoveBtn">↔ SPOSTA</button>
+          <button id="objectWorkBtn">🛠 INTERVENTO</button>
+          <button id="objectSwingBtn" class="hidden">↻ APERTURA</button>
+          <button id="objectDeleteBtn" class="danger">🗑 ELIMINA</button>
+        </div>
+      </div>
       <div class="view-controls" aria-label="Controlli vista">
         <button id="zoomOutBtn" aria-label="Zoom indietro">−</button>
         <button id="zoomResetBtn" class="zoom-level" aria-label="Ripristina vista">100%</button>
@@ -340,6 +355,21 @@
       </div>
       <p id="missingMeasuresText">Mancano misure reali su alcuni muri.</p>
       <button id="insertMissingMeasuresBtn" class="primary block">INSERISCI MISURE</button>
+    </section>
+  </div>
+
+  <div id="finishCheckBackdrop" class="modal-backdrop hidden">
+    <section class="finish-check-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">CONTROLLO RILIEVO</div><h2 id="finishCheckTitle">Verifica finale</h2></div>
+        <button id="closeFinishCheckBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="finishCheckSummary" class="finish-check-summary"></div>
+      <div id="finishCheckList" class="finish-check-list"></div>
+      <div class="finish-check-actions">
+        <button id="fixFinishCheckBtn" class="secondary">TORNA AL RILIEVO</button>
+        <button id="exportFinishCheckBtn" class="primary">ESPORTA JSON</button>
+      </div>
     </section>
   </div>
 
