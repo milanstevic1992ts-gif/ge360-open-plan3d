@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7, full-audit-fixes-v8, llm-notes-debian-v9, frontend-audit-v10, frontend-audit-v11, small-room-surfaces-v13, tools-drawer-v14 ]
   workflow_dispatch:
 
 permissions:
@@ -138,6 +138,24 @@ jobs:
 
           console.log('GE360 room/surface smoke tests OK');
           NODE
+
+      - name: Check secondary tools drawer
+        run: |
+          grep -q 'id="toolsBtn"' index.html
+          grep -q 'id="toolsBackdrop"' index.html
+          grep -q 'class="tools-grid"' index.html
+          if grep -q 'class="work-actions"' index.html; then
+            echo "Old floating work-actions still present"
+            exit 1
+          fi
+          grep -q "function openTools" js/app.js
+          grep -q "function closeTools" js/app.js
+          grep -q "function runTool" js/app.js
+          grep -q "runTool(openNoteTargetChooser)" js/app.js
+          grep -q "runTool(openRoomPicker)" js/app.js
+          grep -q "runTool(openSurfaces)" js/app.js
+          grep -q "runTool(openPresentation)" js/app.js
+          grep -q "runTool(openSolver)" js/app.js
 
       - name: Check small-room presentation guard
         run: |
