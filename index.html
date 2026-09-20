@@ -42,6 +42,7 @@
         <button id="zoomInBtn" aria-label="Zoom avanti">＋</button>
         <button id="rotateBtn" class="rotate-view" aria-label="Ruota planimetria di 90 gradi">↻ 90°</button>
       </div>
+      <button id="solvePlanBtn" class="solve-plan-btn hidden">✨ SISTEMA PIANTA</button>
     </main>
     <footer class="bottom-bar">
       <button id="drawBtn" class="tool active"><span class="tool-icon">✏️</span><span>SCHIZZA</span></button>
@@ -76,7 +77,32 @@
     </section>
   </div>
 
+  <div id="solveBackdrop" class="solver-backdrop hidden">
+    <section class="solver-card">
+      <div class="solver-head">
+        <div><div class="eyebrow dark">MOTORE GEOMETRICO</div><h2>Sistema pianta</h2></div>
+        <button id="closeSolverBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p class="solver-note">Lo schizzo suggerisce la forma. <b>Le misure reali non vengono cambiate.</b></p>
+      <div class="solver-modes" role="group" aria-label="Intensità correzione">
+        <button data-solver-mode="light">LEGGERO</button>
+        <button data-solver-mode="normal" class="active">NORMALE</button>
+        <button data-solver-mode="strong">FORTE</button>
+      </div>
+      <div class="solver-compare">
+        <div class="solver-preview"><div class="solver-label">PRIMA</div><canvas id="solverBefore"></canvas></div>
+        <div class="solver-preview after"><div class="solver-label">DOPO</div><canvas id="solverAfter"></canvas></div>
+      </div>
+      <div id="solverSummary" class="solver-summary"></div>
+      <div id="solverMessages" class="solver-messages"></div>
+      <div class="solver-actions">
+        <button id="cancelSolverBtn" class="secondary">ANNULLA</button>
+        <button id="applySolverBtn" class="primary">USA VERSIONE SISTEMATA ✓</button>
+      </div>
+    </section>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
-  <script src="js/app.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
