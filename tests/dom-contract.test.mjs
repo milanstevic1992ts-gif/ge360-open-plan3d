@@ -58,3 +58,22 @@ test('PRESENTA usa la geometria proporzionata solo quando il solver ha chiuso da
 test('PRESENTA non può aprirsi durante selezione AMBIENTE',()=>{
   assert.match(app,/function openPresentation\(\) \{[\s\S]*if \(roomPickMode\) return toast\('Prima termina la selezione AMBIENTE'\)/);
 });
+
+
+test('porte e finestre sono renderizzate come vere aperture con controllo porta',()=>{
+  assert.match(html,/id="swingToggleBtn"/);
+  assert.match(app,/function drawOpeningSymbol\(/);
+  assert.match(app,/openingInterval\(opening, wall\)/);
+  assert.match(app,/Cancella davvero il tratto di muro/);
+  assert.match(app,/swingToggleBtn'\)\.addEventListener\('click', toggleDoorSwing\)/);
+});
+
+test('interventi hanno preset, stile grafico e quantità strutturata',()=>{
+  assert.match(html,/id="noteWorkPresets"/);
+  assert.match(html,/data-note-style="callout"/);
+  assert.match(html,/data-note-style="text"/);
+  assert.match(app,/function interventionQuantityHint\(/);
+  assert.match(app,/quantityHint: interventionQuantityHint\(pendingNoteTarget\)/);
+  assert.match(app,/kind: 'intervention'/);
+  assert.match(app,/workItems: workItems/);
+});
