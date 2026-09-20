@@ -277,6 +277,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     setMode('draw', false);
     showEditor();
     updateViewControls();
+    syncAutomaticRooms(false);
     updateUI();
     refreshSurfaceCache();
     refreshSourceRevision(plan);
@@ -294,6 +295,9 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     if (!confirm('Eliminare "' + (plan.name || 'Rilievo') + '"?')) return;
     library = library.filter(function (p) { return p.id !== id; });
     saveLibrary();
+    listPlanPhotos(id).then(function (records) {
+      return Promise.all((records || []).map(function (record) { return deletePhoto(record.id); }));
+    }).catch(function () {});
     renderDashboard();
   }
 
@@ -2537,6 +2541,7 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     refreshSurfaceCache();
     render();
     toast(name + ' salvato ✓');
+    setTimeout(function () { syncAutomaticRooms(true); }, 0);
   }
 
   function parseHeightInput() {
@@ -3158,6 +3163,9 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     });
     if (openingsOutside.length) checks.push({level:'error',text:openingsOutside.length + ' aperture non entrano nella lunghezza del muro'});
 
+    var unnamedRooms = rooms.filter(function (room) { return room.needsNaming && !room.geometryMissing; });
+    if (unnamedRooms.length) checks.push({level:'warning',text:unnamedRooms.length + ' ambienti riconosciuti automaticamente sono ancora da nominare'});
+
     var pendingT = findTJunctionCandidates(walls, Math.max(8 / viewZoom, 4), .055);
     if (pendingT.length) checks.push({level:'warning',text:pendingT.length + ' possibili innesti a T da controllare'});
 
@@ -3343,6 +3351,16 @@ import { buildProgressiveTakeoff } from './takeoff.js';
   function clearAll() {
     if (!confirm('Cancellare tutto il disegno di questo rilievo?')) return;
     checkpoint();
+    photoRefs.forEach(function (photo) {
+      if (photo.targetType === 'plan') return;
+      photo.orphaned = true;
+      photo.originalTargetType = photo.targetType;
+      photo.originalTargetId = photo.targetId;
+      photo.targetType = 'plan';
+      photo.targetId = activePlanId || '';
+      photo.targetLabel = 'SCOLLEGATA · disegno cancellato';
+      photo.roomName = null;
+    });
     rawStrokes = [];
     walls = [];
     openings = [];
