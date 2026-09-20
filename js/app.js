@@ -920,7 +920,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     $('roomBtn').classList.remove('active');
     var face = findFaceAtPoint(walls, p);
     if (!face) {
-      toast('Non trovo un ambiente chiuso qui');
+      toast('Ambiente troppo aperto o ambiguo: avvicina un po’ i muri');
       vibrate(60);
       return;
     }
@@ -1015,6 +1015,12 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     return Number.isFinite(v) ? v.toFixed(1).replace('.', ',') + ' m²' : '—';
   }
 
+  function surfaceStatus(status) {
+    if (status === 'verify') return { label: 'DA VERIFICARE', cls: 'verify' };
+    if (status === 'estimated') return { label: 'STIMATO', cls: 'estimated' };
+    return { label: 'OK', cls: 'ok' };
+  }
+
   function totalBox(label, value) {
     return '<div class="surface-total"><div class="k">' + label + '</div><div class="v">' + formatM2(value) + '</div></div>';
   }
@@ -1043,11 +1049,15 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     roomsEl.innerHTML = '';
 
     if (!cache || !cache.faces.length) {
-      totalsEl.innerHTML = '<div class="surface-total" style="grid-column:1/-1"><div class="k">SUPERFICI</div><div class="v">—</div><div style="font-size:12px;color:#64748b;margin-top:5px">Chiudi almeno un ambiente per calcolare i m².</div></div>';
+      totalsEl.innerHTML = '<div class="surface-total" style="grid-column:1/-1"><div class="k">SUPERFICI</div><div class="v">—</div><div style="font-size:12px;color:#64748b;margin-top:5px">Non riesco ancora a riconoscere un ambiente: avvicina un po’ i capi dei muri o aggiungi il lato mancante.</div></div>';
       return;
     }
 
+    var totalState = surfaceStatus(cache.totals.status);
     totalsEl.innerHTML =
+      '<div class="surface-status ' + totalState.cls + '" style="grid-column:1/-1"><b>' + totalState.label + '</b><span>' +
+      (cache.totals.status === 'ok' ? ' Contorni riconosciuti.' : cache.totals.status === 'estimated' ? ' Piccoli gap chiusi automaticamente per la stima.' : ' Stima utilizzabile, ma controlla il disegno se ti serve maggiore precisione.') +
+      '</span></div>' +
       totalBox('PAVIMENTO', cache.totals.floorM2) +
       totalBox('SOFFITTO', cache.totals.ceilingM2) +
       totalBox('PARETI LORDE', cache.totals.wallsM2) +
@@ -1062,8 +1072,19 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       var card = document.createElement('div');
       card.className = 'surface-room';
       var title = document.createElement('h3');
-      title.textContent = m.room.name;
+      title.textContent = m.room.name + ' ';
+      var state = surfaceStatus(m.status);
+      var badge = document.createElement('span');
+      badge.className = 'surface-badge ' + state.cls;
+      badge.textContent = state.label;
+      title.appendChild(badge);
       card.appendChild(title);
+      if (Number.isFinite(m.maxGapCm) && m.maxGapCm > 0) {
+        var gapInfo = document.createElement('div');
+        gapInfo.className = 'surface-gap';
+        gapInfo.textContent = 'Chiusura stimata: ' + m.maxGapCm.toFixed(0) + ' cm';
+        card.appendChild(gapInfo);
+      }
       var grid = document.createElement('div');
       grid.className = 'surface-room-grid';
       grid.innerHTML =
@@ -1121,14 +1142,18 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       var metric = byRoom.get(room.id);
       var area = metric && Number.isFinite(metric.floorM2) ? metric.floorM2.toFixed(1).replace('.', ',') + ' m²' : '';
       var title = String(room.name || 'Ambiente').toUpperCase();
+      var state = surfaceStatus(metric ? metric.status : face.quality);
+      var statusText = state.label;
 
       ctx.save();
       ctx.font = '1000 12px system-ui';
       var w1 = ctx.measureText(title).width;
       ctx.font = '800 11px system-ui';
       var w2 = area ? ctx.measureText(area).width : 0;
-      var boxW = Math.max(w1, w2) + 20;
-      var boxH = area ? 43 : 28;
+      ctx.font = '900 9px system-ui';
+      var w3 = ctx.measureText(statusText).width;
+      var boxW = Math.max(w1, w2, w3) + 20;
+      var boxH = area ? 58 : 42;
       ctx.fillStyle = 'rgba(255,255,255,.94)';
       ctx.strokeStyle = '#cbd5e1';
       ctx.lineWidth = 1.5;
@@ -1139,12 +1164,15 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = '1000 12px system-ui';
-      ctx.fillText(title, p.x, p.y - (area ? 7 : 0));
+      ctx.fillText(title, p.x, p.y - (area ? 14 : 7));
       if (area) {
         ctx.fillStyle = '#2563eb';
         ctx.font = '800 11px system-ui';
-        ctx.fillText(area, p.x, p.y + 10);
+        ctx.fillText(area, p.x, p.y + 3);
       }
+      ctx.fillStyle = state.cls === 'ok' ? '#15803d' : state.cls === 'estimated' ? '#b45309' : '#b91c1c';
+      ctx.font = '900 9px system-ui';
+      ctx.fillText(statusText, p.x, p.y + (area ? 19 : 10));
       ctx.restore();
     });
   }
