@@ -4051,6 +4051,94 @@ import {
     });
   }
 
+  function drawDirectionalPhotos() {
+    photoRefs.forEach(function (photo, index) {
+      if (!photo || !photo.cameraPoint || !photo.targetPoint) return;
+      if (!Number.isFinite(photo.cameraPoint.x) || !Number.isFinite(photo.cameraPoint.y) ||
+          !Number.isFinite(photo.targetPoint.x) || !Number.isFinite(photo.targetPoint.y)) return;
+
+      var a=worldToScreen(photo.cameraPoint);
+      var b=worldToScreen(photo.targetPoint);
+      var dx=b.x-a.x, dy=b.y-a.y;
+      var len=Math.hypot(dx,dy);
+      if (!(len>3)) return;
+      var ux=dx/len, uy=dy/len;
+      var arrowLen=Math.min(len,58);
+      var ex=a.x+ux*arrowLen, ey=a.y+uy*arrowLen;
+
+      ctx.save();
+      ctx.strokeStyle='#7c3aed';
+      ctx.fillStyle='#7c3aed';
+      ctx.lineWidth=2;
+      ctx.setLineDash([5,4]);
+      ctx.beginPath();
+      ctx.moveTo(a.x,a.y);
+      ctx.lineTo(ex,ey);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      var ah=8;
+      ctx.beginPath();
+      ctx.moveTo(ex,ey);
+      ctx.lineTo(ex-ux*ah-uy*ah*.55,ey-uy*ah+ux*ah*.55);
+      ctx.lineTo(ex-ux*ah+uy*ah*.55,ey-uy*ah-ux*ah*.55);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle='#ffffff';
+      ctx.strokeStyle='#7c3aed';
+      ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.arc(a.x,a.y,12,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle='#7c3aed';
+      ctx.font='1000 10px system-ui';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.fillText('📷',a.x,a.y+.5);
+
+      ctx.fillStyle='#7c3aed';
+      ctx.font='900 8px system-ui';
+      ctx.fillText(String(index+1),a.x,a.y+20);
+      ctx.restore();
+    });
+  }
+
+  async function commitPhotoPlacement(p) {
+    if (!pendingPhotoPlacement) return false;
+    var pending=pendingPhotoPlacement;
+    var ref=photoRefs.find(function (photo) { return photo.id===pending.photoId; });
+    pendingPhotoPlacement=null;
+    $('photoPlacementBanner').classList.add('hidden');
+    if (!ref || !pending.targetPoint) {
+      toast('Foto salvata senza direzione');
+      return true;
+    }
+
+    var cameraPoint={x:p.x,y:p.y};
+    var targetPoint={x:pending.targetPoint.x,y:pending.targetPoint.y};
+    var directionDeg=(Math.atan2(targetPoint.y-cameraPoint.y,targetPoint.x-cameraPoint.x)*180/Math.PI+360)%360;
+    ref.cameraPoint=cameraPoint;
+    ref.targetPoint=targetPoint;
+    ref.directionDeg=directionDeg;
+
+    try {
+      await updatePhotoMetadata(ref.id,{
+        cameraPoint:cameraPoint,
+        targetPoint:targetPoint,
+        directionDeg:directionDeg
+      });
+    } catch (_) {}
+
+    persistActive();
+    updateUI();
+    render();
+    vibrate(22);
+    toast('Direzione foto salvata ✓');
+    return true;
+  }
+
   function render() {
     if ($('editor').classList.contains('hidden')) return;
     var w = canvas.clientWidth, h = canvas.clientHeight;
@@ -4086,6 +4174,7 @@ import {
     if (editorLayer === 'survey') walls.forEach(drawMeasure);
     openings.forEach(drawOpening);
     drawRoomLabels();
+    drawDirectionalPhotos();
     if (editorLayer === 'works') drawNoteMarkers();
     else annotationHitBoxes = [];
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
@@ -4159,11 +4248,15 @@ import {
     if (e.isPrimary === false) return;
     e.preventDefault();
     var sp = screenPoint(e);
+    var p = screenToWorld(sp);
+    if (pendingPhotoPlacement) {
+      commitPhotoPlacement(p);
+      return;
+    }
     if (editorLayer === 'works') {
       var annotationHit = annotationHitAt(sp);
       if (annotationHit && startAnnotationDrag(e, annotationHit)) return;
     }
-    var p = screenToWorld(sp);
     if (openingMoveMode) {
       startOpeningMoveDrag(e, p);
       return;
