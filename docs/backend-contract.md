@@ -219,3 +219,102 @@ SVG/PDF/PNG/DXF, rappresentare l'intervento in modo coerente con il target.
 Questa struttura è intenzionalmente adatta anche a futuri computi metrici:
 `workItems[].code` identifica la lavorazione, mentre `context` contiene le
 quantità metriche già disponibili dal rilievo.
+
+
+## Schema v3: ambienti automatici, foto e computo progressivo
+
+Il frontend dichiara ora:
+
+```json
+{
+  "metadata": {
+    "schemaVersion": 3,
+    "features": [
+      "architectural-openings",
+      "structured-interventions",
+      "automatic-rooms",
+      "linked-local-photos",
+      "progressive-takeoff"
+    ]
+  }
+}
+```
+
+### Ambienti automatici
+
+Gli ambienti possono essere creati automaticamente quando il frontend riconosce
+una faccia chiusa affidabile.
+
+Esempio:
+
+```json
+{
+  "id": "room-1",
+  "name": "Ambiente 1",
+  "wallIds": ["w1", "w2", "w3", "w4"],
+  "faceKey": "w1|w2|w3|w4",
+  "autoDetected": true,
+  "needsNaming": true,
+  "detectedQuality": "ok"
+}
+```
+
+Quando l'utente conferma il nome, `needsNaming` diventa `false`. Il backend
+deve conservare il flag ma non deve inventare un nome diverso.
+
+### Foto collegate
+
+Il payload contiene soltanto i metadati delle foto:
+
+```json
+{
+  "id": "photo-1",
+  "targetType": "wall",
+  "targetId": "w2",
+  "targetLabel": "Muro B · Bagno",
+  "roomName": "Bagno",
+  "name": "IMG_001.jpg",
+  "mime": "image/jpeg",
+  "size": 481223,
+  "createdAt": "2026-09-20T20:00:00Z",
+  "localOnly": true
+}
+```
+
+Il blob fotografico resta sul dispositivo in IndexedDB. Finché non viene
+implementato un endpoint media/upload dedicato, `localOnly: true` significa
+che il backend NON deve aspettarsi di poter scaricare il file dalla voce JSON.
+
+### Computo progressivo
+
+Il frontend può allegare un riepilogo già calcolato dagli interventi:
+
+```json
+{
+  "takeoff": {
+    "rows": [
+      {
+        "code": "floor_tile",
+        "label": "POSA PIASTRELLE",
+        "category": "finish",
+        "value": 6.82,
+        "unit": "m²",
+        "basis": "floor_area",
+        "targets": 1,
+        "estimated": false,
+        "rooms": ["Bagno"]
+      }
+    ],
+    "unresolved": [],
+    "totals": {
+      "rows": 1,
+      "interventions": 1,
+      "unresolved": 0
+    }
+  }
+}
+```
+
+Il backend deve ricalcolare o validare le quantità quando dispone di una
+geometria autoritativa più aggiornata. Le righe con `estimated: true` devono
+restare distinguibili dalle quantità confermate.
