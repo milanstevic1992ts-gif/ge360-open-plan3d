@@ -27,6 +27,9 @@ import {
   applyMeasuredWallProportion,
   findTJunctionCandidates
 } from './editor-geometry.js';
+import { syncDetectedRooms } from './auto-rooms.js';
+import { savePhoto, getPhoto, deletePhoto, listPlanPhotos, compressPhoto } from './photo-store.js';
+import { buildProgressiveTakeoff } from './takeoff.js';
 
 (function () {
   'use strict';
@@ -62,6 +65,9 @@ import {
   var longPressState = null;
   var annotationHitBoxes = [];
   var annotationDrag = null;
+  var photoRefs = [];
+  var pendingPhotoTarget = null;
+  var photoObjectUrls = [];
   var dpr = 1;
   var viewZoom = 1;
   var viewRotation = 0;
@@ -154,6 +160,7 @@ import {
       windows: os.filter(function (o) { return o.type === 'window'; }).length,
       rooms: plan ? (plan.rooms || []).length : rooms.length,
       notes: plan ? (plan.notes || []).length : notes.length,
+      photos: plan ? (plan.photos || []).length : photoRefs.length,
       floorM2: plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null
     };
   }
@@ -168,6 +175,7 @@ import {
     plan.openings = clone(openings);
     plan.rooms = clone(rooms);
     plan.notes = clone(notes);
+    plan.photos = clone(photoRefs);
     plan.wallHeightM = wallHeightM;
     plan.liveScaleCmPerUnit = Number.isFinite(liveScaleCmPerUnit) ? liveScaleCmPerUnit : null;
     plan.editorLayer = editorLayer;
@@ -212,6 +220,7 @@ import {
       openings: [],
       rooms: [],
       notes: [],
+      photos: [],
       wallHeightM: 2.70,
       liveScaleCmPerUnit: null,
       editorLayer: 'survey',
@@ -234,6 +243,8 @@ import {
     openings = clone(plan.openings || []);
     rooms = clone(plan.rooms || []);
     notes = clone(plan.notes || []).map(function (note) { return migrateIntervention(note); });
+    photoRefs = clone(plan.photos || []);
+    pendingPhotoTarget = null;
     notePickMode = null;
     pendingNoteTarget = null;
     currentNoteId = null;
