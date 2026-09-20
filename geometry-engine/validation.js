@@ -84,9 +84,44 @@ export function analyzePlan(input, opts) {
   const tol = Number.isFinite(opts.nodeMergeTolerance) && opts.nodeMergeTolerance >= 0 ? opts.nodeMergeTolerance : Math.max(diag * opts.nodeMergeToleranceRatio, 1e-6);
   res.tol = tol;
 
-  const { nodes, wallNodes } = mergeEndpoints(walls, okIdx, tol);
+  const roughRatios = okIdx
+    .map((i) => walls[i].sl > 1e-9 ? walls[i].L / walls[i].sl : NaN)
+    .filter(Number.isFinite);
+  const roughScale = roughRatios.length ? median(roughRatios) : 1;
+  const repairByCm = Number.isFinite(opts.topologyRepairMaxGapCm) && roughScale > 1e-9
+    ? opts.topologyRepairMaxGapCm / roughScale
+    : tol;
+  const repairByRatio = Number.isFinite(opts.topologyRepairMaxGapRatio)
+    ? Math.max(tol, diag * opts.topologyRepairMaxGapRatio)
+    : repairByCm;
+  const repairTolerance = opts.topologyRepair === false
+    ? tol
+    : Math.max(tol, Math.min(repairByCm, repairByRatio));
+
+  const { nodes, wallNodes, repairs } = mergeEndpoints(walls, okIdx, tol, {
+    repair: opts.topologyRepair !== false,
+    repairTolerance,
+    ambiguityRatio: opts.topologyRepairAmbiguityRatio,
+    attachRatio: opts.topologyRepairAttachRatio
+  });
   res.nodes = nodes;
   res.wallNodes = wallNodes;
+  res.topologyRepairs = repairs || [];
+  res.scale = roughScale;
+
+  if (res.topologyRepairs.length) {
+    warnings.push(issue(
+      "topology_repaired",
+      "info",
+      `Ricuciti ${res.topologyRepairs.length} collegamenti tra muri vicini per ristabilire la continuità della pianta. Le misure reali non sono state modificate.`,
+      {
+        repairs: res.topologyRepairs.map((r) => ({
+          walls: [r.wallA, r.wallB].filter(Boolean),
+          sketchGapUnits: r.distance
+        }))
+      }
+    ));
+  }
 
   const pairKey = new Map();
   for (const i of okIdx) {
@@ -184,7 +219,7 @@ export function analyzePlan(input, opts) {
   }
 
   const ratios = solvableIdx.map((i) => walls[i].L / walls[i].sl);
-  const scale = ratios.length ? median(ratios) : 1;
+  const scale = ratios.length ? median(ratios) : roughScale;
   res.scale = scale;
   const k = opts.proportionWarningRatio;
   if (solvableIdx.length >= 3 && k > 1) {
@@ -215,6 +250,7 @@ export function validateFloorPlan(plan, options = {}) {
       openingCount: an.openings.length,
       nodeMergeTolerance: an.tol,
       estimatedScaleCmPerUnit: an.scale,
+      repairedJoints: (an.topologyRepairs || []).length,
     },
   };
 }
