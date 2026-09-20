@@ -3105,6 +3105,46 @@ import {
     return lines.length ? lines : ['INTERVENTO'];
   }
 
+  function annotationBoxesOverlap(a, b, pad) {
+    pad = Number.isFinite(pad) ? pad : 5;
+    return !(a.x + a.w + pad <= b.x || b.x + b.w + pad <= a.x ||
+      a.y + a.h + pad <= b.y || b.y + b.h + pad <= a.y);
+  }
+
+  function chooseAnnotationPosition(anchor, preferred, boxW, boxH, occupied, bounds) {
+    var tries = [
+      preferred,
+      {x:anchor.x, y:anchor.y-58},
+      {x:anchor.x+70, y:anchor.y-42},
+      {x:anchor.x-70, y:anchor.y-42},
+      {x:anchor.x+78, y:anchor.y+10},
+      {x:anchor.x-78, y:anchor.y+10},
+      {x:anchor.x, y:anchor.y+62},
+      {x:anchor.x+74, y:anchor.y+58},
+      {x:anchor.x-74, y:anchor.y+58},
+      {x:anchor.x, y:anchor.y-100}
+    ];
+    var margin = 8;
+    var fallback = preferred;
+
+    for (var i=0;i<tries.length;i++) {
+      var c = tries[i];
+      var cx = Math.max(margin + boxW/2, Math.min(bounds.w-margin-boxW/2, c.x));
+      var cy = Math.max(margin + boxH/2, Math.min(bounds.h-margin-boxH/2, c.y));
+      var box = {x:cx-boxW/2,y:cy-boxH/2,w:boxW,h:boxH};
+      if (!(occupied || []).some(function (other) { return annotationBoxesOverlap(box, other, 5); })) {
+        return {x:cx,y:cy,box:box};
+      }
+      fallback = {x:cx,y:cy};
+    }
+
+    return {
+      x:fallback.x,
+      y:fallback.y,
+      box:{x:fallback.x-boxW/2,y:fallback.y-boxH/2,w:boxW,h:boxH}
+    };
+  }
+
   function drawInterventionAnnotation(gctx, note, anchorScreen, options) {
     options = options || {};
     var style = noteDisplayStyle(note && note.displayStyle);
@@ -3114,10 +3154,8 @@ import {
     var fontSize = compact ? 8 : 9;
     var maxWidth = compact ? 116 : 150;
     var maxLines = compact ? 2 : 3;
-    var offsetX = note.targetType === 'wall' || note.targetType === 'opening' ? 34 : 0;
-    var offsetY = note.targetType === 'ceiling' ? -38 : note.targetType === 'floor' ? 34 : -30;
-    var labelX = anchorScreen.x + offsetX;
-    var labelY = anchorScreen.y + offsetY;
+    var offsetX = note.targetType === 'wall' || note.targetType === 'opening' ? 40 : 0;
+    var offsetY = note.targetType === 'ceiling' ? -42 : note.targetType === 'floor' ? 42 : -34;
 
     gctx.save();
     gctx.font = '900 ' + fontSize + 'px system-ui';
@@ -3126,6 +3164,35 @@ import {
     var textW = Math.min(maxWidth, Math.max.apply(Math, lines.map(function (line) { return gctx.measureText(line).width; })));
     var boxW = textW + (compact ? 10 : 14);
     var boxH = lines.length * lineH + (compact ? 8 : 12);
+
+    var preferred = {x:anchorScreen.x+offsetX,y:anchorScreen.y+offsetY};
+    if (options.manualOffsetScreen) {
+      preferred = {
+        x:anchorScreen.x + options.manualOffsetScreen.x,
+        y:anchorScreen.y + options.manualOffsetScreen.y
+      };
+    }
+
+    var placement;
+    if (options.manualOffsetScreen || !options.bounds) {
+      placement = {
+        x:preferred.x,
+        y:preferred.y,
+        box:{x:preferred.x-boxW/2,y:preferred.y-boxH/2,w:boxW,h:boxH}
+      };
+    } else {
+      placement = chooseAnnotationPosition(
+        anchorScreen,
+        preferred,
+        boxW,
+        boxH,
+        options.occupied || [],
+        options.bounds
+      );
+    }
+
+    var labelX = placement.x;
+    var labelY = placement.y;
 
     if (style === 'callout') {
       gctx.strokeStyle = color;
@@ -3141,10 +3208,10 @@ import {
       gctx.fill();
     }
 
-    gctx.fillStyle = style === 'text' ? 'rgba(255,255,255,.80)' : 'rgba(255,255,255,.96)';
+    gctx.fillStyle = style === 'text' ? 'rgba(255,255,255,.82)' : 'rgba(255,255,255,.96)';
     gctx.strokeStyle = color;
     gctx.lineWidth = style === 'text' ? 1 : 1.5;
-    roundRectPath(gctx, labelX - boxW / 2, labelY - boxH / 2, boxW, boxH, compact ? 5 : 7);
+    roundRectPath(gctx, placement.box.x, placement.box.y, boxW, boxH, compact ? 5 : 7);
     gctx.fill();
     gctx.stroke();
 
@@ -3156,14 +3223,124 @@ import {
       gctx.fillText(line, labelX, yy);
     });
     gctx.restore();
+
+    if (options.occupied) options.occupied.push(placement.box);
+    return {
+      x:placement.box.x,
+      y:placement.box.y,
+      w:boxW,
+      h:boxH,
+      center:{x:labelX,y:labelY},
+      anchor:{x:anchorScreen.x,y:anchorScreen.y}
+    };
+  }
+
+  function workCodes(note) {
+    return normalizeWorkItems(note && note.workItems).map(function (x) { return x.code; });
+  }
+
+  function wallInterventionStyle(wall) {
+    var related = notes.filter(function (n) { return n.targetType === 'wall' && n.targetId === wall.id; });
+    var codes = [];
+    var categories = [];
+    related.forEach(function (n) {
+      normalizeWorkItems(n.workItems).forEach(function (item) {
+        codes.push(item.code);
+        categories.push(item.category);
+      });
+    });
+    if (codes.indexOf('wall_demolish') !== -1 || categories.indexOf('demolition') !== -1) {
+      return {color:'#dc2626',width:7,dash:[10,7]};
+    }
+    if (codes.some(function (c) { return c === 'wall_new' || c === 'wall_drywall' || c === 'wall_opening_new' || c === 'wall_opening_close'; }) ||
+        categories.indexOf('construction') !== -1) {
+      return {color:'#2563eb',width:8,dash:[]};
+    }
+    if (codes.indexOf('wall_tile') !== -1 || codes.indexOf('wall_plaster_paint') !== -1 || categories.indexOf('finish') !== -1) {
+      return {color:'#d97706',width:7,dash:[3,4]};
+    }
+    return {color:'#64748b',width:6,dash:[]};
+  }
+
+  function interventionFaceForNote(note, faces) {
+    var room = rooms.find(function (r) { return r.id === note.targetId; });
+    if (room) return matchRoomFace(room, faces);
+    return faces.find(function (f) { return faceKey(f) === note.targetId; }) || null;
+  }
+
+  function drawInterventionSurfaces() {
+    var faces = buildFaces(walls);
+    notes.forEach(function (note) {
+      if (['floor','ceiling','room'].indexOf(note.targetType) === -1) return;
+      var face = interventionFaceForNote(note, faces);
+      if (!face || !face.polygon || face.polygon.length < 3) return;
+      var items = normalizeWorkItems(note.workItems);
+      if (!items.length) return;
+      var color = interventionColor(note);
+
+      ctx.save();
+      ctx.beginPath();
+      face.polygon.forEach(function (p,i) {
+        var sp = worldToScreen(p);
+        if (!i) ctx.moveTo(sp.x,sp.y); else ctx.lineTo(sp.x,sp.y);
+      });
+      ctx.closePath();
+
+      if (note.targetType === 'ceiling') {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([7,5]);
+        ctx.stroke();
+        ctx.restore();
+        return;
+      }
+
+      ctx.globalAlpha = .08;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.clip();
+
+      var step = 18;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = .28;
+      ctx.lineWidth = 1;
+      var size = canvas.clientWidth + canvas.clientHeight;
+      for (var x=-canvas.clientHeight;x<size;x+=step) {
+        ctx.beginPath();
+        ctx.moveTo(x,0);
+        ctx.lineTo(x+canvas.clientHeight,canvas.clientHeight);
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
   }
 
   function drawNoteMarkers() {
+    annotationHitBoxes = [];
     var faces = buildFaces(walls);
+    var occupied = [];
+    var bounds = {w:canvas.clientWidth,h:canvas.clientHeight};
+
     notes.forEach(function (note) {
-      var anchor = noteAnchorForGeometry(note, walls, openings, rooms, faces);
-      if (!anchor) return;
-      drawInterventionAnnotation(ctx, note, worldToScreen(anchor), { compact:false });
+      var anchorWorld = noteAnchorForGeometry(note, walls, openings, rooms, faces);
+      if (!anchorWorld) return;
+      var anchor = worldToScreen(anchorWorld);
+      var manual = null;
+      if (note.labelOffset && Number.isFinite(note.labelOffset.x) && Number.isFinite(note.labelOffset.y)) {
+        var shifted = worldToScreen({
+          x:anchorWorld.x + note.labelOffset.x,
+          y:anchorWorld.y + note.labelOffset.y
+        });
+        manual = {x:shifted.x-anchor.x,y:shifted.y-anchor.y};
+      }
+      var hit = drawInterventionAnnotation(ctx, note, anchor, {
+        compact:false,
+        occupied:occupied,
+        bounds:bounds,
+        manualOffsetScreen:manual
+      });
+      if (hit) annotationHitBoxes.push(Object.assign({noteId:note.id}, hit));
     });
   }
 
@@ -3176,11 +3353,19 @@ import {
     ctx.fillRect(0, 0, w, h);
 
     drawRoomAreas();
-    rawStrokes.forEach(function (s) { drawPolyline(s.raw, '#cbd5e1', 3); });
+    if (editorLayer === 'works') drawInterventionSurfaces();
+    if (editorLayer === 'survey') rawStrokes.forEach(function (stroke) { drawPolyline(stroke.raw, '#cbd5e1', 3); });
+
     walls.forEach(function (wall) {
       ctx.save();
-      ctx.strokeStyle = wall.id === selectedWallId ? '#2563eb' : '#0f172a';
-      ctx.lineWidth = wall.id === selectedWallId ? 10 : 8;
+      var style = editorLayer === 'works' ? wallInterventionStyle(wall) : {
+        color:wall.id === selectedWallId ? '#2563eb' : '#0f172a',
+        width:wall.id === selectedWallId ? 10 : 8,
+        dash:[]
+      };
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width;
+      ctx.setLineDash(style.dash || []);
       ctx.lineCap = 'round';
       var sa = worldToScreen(wall.a);
       var sb = worldToScreen(wall.b);
@@ -3190,10 +3375,12 @@ import {
       ctx.stroke();
       ctx.restore();
     });
-    walls.forEach(drawMeasure);
+
+    if (editorLayer === 'survey') walls.forEach(drawMeasure);
     openings.forEach(drawOpening);
     drawRoomLabels();
-    drawNoteMarkers();
+    if (editorLayer === 'works') drawNoteMarkers();
+    else annotationHitBoxes = [];
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
   }
 
