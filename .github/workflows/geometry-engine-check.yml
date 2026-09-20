@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6 ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5, indicative-surfaces-v6, quick-edit-presentation-v7 ]
   workflow_dispatch:
 
 permissions:
@@ -122,6 +122,15 @@ jobs:
 
           console.log('GE360 room/surface smoke tests OK');
           NODE
+
+      - name: Check quick edit and presentation hooks
+        run: |
+          grep -q "id=\"presentBtn\"" index.html
+          grep -q "id=\"presentationCanvas\"" index.html
+          grep -q "id=\"deleteOpeningBtn\"" index.html
+          grep -q "function editWallMeasurement" js/app.js
+          grep -q "function editOpening" js/app.js
+          grep -q "function renderPresentation" js/app.js
 
       - name: Verify engine stays isolated
         run: |
