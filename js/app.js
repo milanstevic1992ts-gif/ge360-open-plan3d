@@ -1662,13 +1662,20 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 
     var plan = currentPlan();
     $('presentationTitle').textContent = plan && plan.name ? plan.name : 'Planimetria';
-    var state = surfaceStatus(cache.totals.status);
+    var hasFaces = !!(cache.faces && cache.faces.length);
+    var state = hasFaces ? surfaceStatus(cache.totals.status) : { label: 'DA VERIFICARE', cls: 'verify' };
+    var displayTotals = hasFaces ? cache.totals : {
+      floorM2: null,
+      ceilingM2: null,
+      wallsM2: null,
+      wallsCeilingM2: null
+    };
     $('presentationStamp').textContent = 'Rilievo indicativo · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
     $('presentationSummary').innerHTML =
-      presentationCard('PAVIMENTO', cache.totals.floorM2) +
-      presentationCard('SOFFITTO', cache.totals.ceilingM2) +
-      presentationCard('PARETI LORDE', cache.totals.wallsM2) +
-      presentationCard('PARETI + SOFFITTO', cache.totals.wallsCeilingM2);
+      presentationCard('PAVIMENTO', displayTotals.floorM2) +
+      presentationCard('SOFFITTO', displayTotals.ceilingM2) +
+      presentationCard('PARETI LORDE', displayTotals.wallsM2) +
+      presentationCard('PARETI + SOFFITTO', displayTotals.wallsCeilingM2);
 
     var roomWrap = $('presentationRooms');
     roomWrap.innerHTML = '';
