@@ -850,15 +850,18 @@ import {
         type:'wall',
         id:obj.id,
         label:'Muro ' + wallReference(wi) + (room ? ' · ' + room.name : ''),
-        roomName:room ? room.name : null
+        roomName:room ? room.name : null,
+        targetPoint:{x:(obj.a.x+obj.b.x)/2,y:(obj.a.y+obj.b.y)/2}
       };
     }
     var oroom = roomForWall(obj.wallId);
+    var ow = walls.find(function (w) { return w.id === obj.wallId; });
     return {
       type:'opening',
       id:obj.id,
       label:(obj.type === 'door' ? 'Porta' : 'Finestra') + (oroom ? ' · ' + oroom.name : ''),
-      roomName:oroom ? oroom.name : null
+      roomName:oroom ? oroom.name : null,
+      targetPoint:ow ? openingWorldPoint(obj,ow) : null
     };
   }
 
@@ -868,7 +871,9 @@ import {
       type:String(target.type || 'plan'),
       id:String(target.id || activePlanId),
       label:String(target.label || 'Rilievo'),
-      roomName:target.roomName || null
+      roomName:target.roomName || null,
+      targetPoint:target.targetPoint && Number.isFinite(target.targetPoint.x) && Number.isFinite(target.targetPoint.y)
+        ? {x:target.targetPoint.x,y:target.targetPoint.y} : null
     };
     $('photoInput').value = '';
     $('photoInput').click();
@@ -891,12 +896,20 @@ import {
         targetId:target.id,
         targetLabel:target.label,
         roomName:target.roomName,
+        targetPoint:target.targetPoint || null,
         name:file.name || 'foto.jpg',
         mime:blob.type || file.type || 'image/jpeg',
         blob:blob,
         createdAt:new Date().toISOString()
       });
       photoRefs.push(meta);
+      pendingPhotoPlacement = {
+        photoId:meta.id,
+        targetPoint:target.targetPoint || null
+      };
+      closeRoomModal();
+      closePhotosGallery();
+      $('photoPlacementBanner').classList.remove('hidden');
       persistActive();
       updateUI();
       if (!$('roomBackdrop').classList.contains('hidden') && pendingRoomId) {
@@ -904,7 +917,7 @@ import {
         $('roomPhotoCount').textContent = count + ' foto';
       }
       vibrate(24);
-      toast('Foto collegata ✓');
+      toast(target.targetPoint ? 'Foto salvata · indica da dove hai scattato' : 'Foto collegata ✓');
     } catch (e) {
       toast('Foto non salvata · ' + (e.message || 'errore archivio'));
     }
@@ -975,7 +988,8 @@ import {
       title.textContent = ref.targetLabel || 'Rilievo';
       var meta = document.createElement('span');
       var d = ref.createdAt ? new Date(ref.createdAt).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
-      meta.textContent = (ref.roomName ? ref.roomName + ' · ' : '') + d + (ref.orphaned ? ' · SCOLLEGATA' : '');
+      var directionText = Number.isFinite(ref.directionDeg) ? ' · ↗ ' + Math.round(ref.directionDeg) + '°' : '';
+      meta.textContent = (ref.roomName ? ref.roomName + ' · ' : '') + d + directionText + (ref.orphaned ? ' · SCOLLEGATA' : '');
       info.appendChild(title);
       info.appendChild(meta);
 
@@ -1018,6 +1032,9 @@ import {
           mime:record.mime || 'image/jpeg',
           size:record.size || 0,
           createdAt:record.createdAt || null,
+          cameraPoint:record.cameraPoint || null,
+          targetPoint:record.targetPoint || null,
+          directionDeg:Number.isFinite(record.directionDeg) ? record.directionDeg : null,
           localOnly:true
         });
       });
@@ -1037,11 +1054,14 @@ import {
     if (!pendingRoomId) return toast('Prima salva o seleziona l’ambiente');
     var room = rooms.find(function (r) { return r.id === pendingRoomId; });
     if (!room) return toast('Ambiente non disponibile');
+    var faces = buildFaces(walls);
+    var face = matchRoomFace(room, faces);
     capturePhotoForTarget({
       type:'room',
       id:room.id,
       label:room.name || 'Ambiente',
-      roomName:room.name || null
+      roomName:room.name || null,
+      targetPoint:face && face.centroid ? {x:face.centroid.x,y:face.centroid.y} : null
     });
   }
 
