@@ -45,6 +45,7 @@ import {
   var activePointerId = null;
   var selectedWallId = null;
   var currentOpeningId = null;
+  var wallMoveMode = null;
   var sheetType = null;
   var numberText = '';
   var history = [];
@@ -633,6 +634,7 @@ import {
   function cancelPickModes() {
     notePickMode = null;
     roomPickMode = false;
+    wallMoveMode = null;
     $('notesBtn').classList.remove('active');
     $('roomBtn').classList.remove('active');
   }
@@ -1114,6 +1116,108 @@ import {
     toast('Apertura porta invertita');
   }
 
+  function deleteSelectedWall() {
+    var wall = walls.find(function (w) { return w.id === selectedWallId; });
+    if (!wall) return;
+
+    var idx = walls.findIndex(function (w) { return w.id === wall.id; });
+    var label = 'Muro ' + wallReference(idx);
+    var measure = Number.isFinite(wall.lengthCm) ? ' · ' + (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '';
+    var linkedOpenings = openings.filter(function (o) { return o.wallId === wall.id; });
+    var question = 'Eliminare ' + label + measure + '?';
+    if (linkedOpenings.length) question += '\nVerranno eliminate anche ' + linkedOpenings.length + ' aperture collegate.';
+    if (!confirm(question)) return;
+
+    checkpoint();
+
+    var openingIds = new Set(linkedOpenings.map(function (o) { return o.id; }));
+    openings = openings.filter(function (o) { return o.wallId !== wall.id; });
+
+    notes = notes.filter(function (n) {
+      if (n.targetType === 'wall' && n.targetId === wall.id) return false;
+      if (n.targetType === 'opening' && openingIds.has(n.targetId)) return false;
+      return true;
+    });
+
+    rooms = rooms.map(function (room) {
+      if (!Array.isArray(room.wallIds) || room.wallIds.indexOf(wall.id) === -1) return room;
+      var nextIds = room.wallIds.filter(function (id) { return id !== wall.id; });
+      return Object.assign({}, room, {
+        wallIds: nextIds,
+        faceKey: nextIds.slice().sort().join('|')
+      });
+    });
+
+    // Il vecchio tratto grezzo non deve rimanere come una linea fantasma.
+    rawStrokes = rawStrokes.filter(function (stroke) {
+      return !(Array.isArray(stroke.wallIds) && stroke.wallIds.indexOf(wall.id) !== -1);
+    });
+
+    walls = walls.filter(function (w) { return w.id !== wall.id; });
+    selectedWallId = null;
+    surfaceCache = null;
+    closeSheet();
+    refreshSurfaceCache();
+    persistActive();
+    updateUI();
+    render();
+    vibrate(30);
+    toast(label + ' eliminato');
+  }
+
+  function startWallEndpointMove(end) {
+    var wall = walls.find(function (w) { return w.id === selectedWallId; });
+    if (!wall || (end !== 'a' && end !== 'b')) return;
+    wallMoveMode = {
+      wallId: wall.id,
+      end: end,
+      origin: { x: wall[end].x, y: wall[end].y }
+    };
+    closeSheet();
+    selectedWallId = wall.id;
+    toast('Tocca la nuova posizione dell’' + (end === 'a' ? 'inizio' : 'fine') + ' muro');
+    vibrate(16);
+    render();
+  }
+
+  function commitWallEndpointMove(p) {
+    if (!wallMoveMode) return false;
+    var wall = walls.find(function (w) { return w.id === wallMoveMode.wallId; });
+    if (!wall) {
+      wallMoveMode = null;
+      return false;
+    }
+
+    checkpoint();
+    var origin = wallMoveMode.origin;
+    var tolerance = Math.max(3 / viewZoom, 1e-6);
+
+    // Muove l'intero nodo: tutti i muri che condividono esattamente quell'angolo
+    // seguono il punto, così la continuità non viene spezzata.
+    walls.forEach(function (candidate) {
+      ['a', 'b'].forEach(function (end) {
+        if (!candidate[end]) return;
+        if (dist(candidate[end], origin) <= tolerance) {
+          candidate[end] = { x: p.x, y: p.y };
+        }
+      });
+    });
+
+    // Dopo una modifica manuale la geometria a muri è la fonte visuale.
+    // Rimuoviamo gli stroke grezzi per evitare sovrapposizioni fantasma.
+    rawStrokes = [];
+    surfaceCache = null;
+    wallMoveMode = null;
+    openings.forEach(function (o) { recalcOpeningPosition(o); });
+    refreshSurfaceCache();
+    persistActive();
+    updateUI();
+    render();
+    vibrate(24);
+    toast('Angolo spostato ✓');
+    return true;
+  }
+
   function openNextMissing(preferredId) {
     var target = preferredId ? walls.find(function (w) { return w.id === preferredId && !w.lengthCm; }) : null;
     if (!target) target = walls.find(function (w) { return !w.lengthCm; });
@@ -1128,10 +1232,12 @@ import {
     sheetType = type;
     $('sheetBackdrop').classList.remove('hidden');
     $('deleteOpeningBtn').classList.toggle('hidden', type === 'wall');
+    $('deleteWallBtn').classList.toggle('hidden', type !== 'wall');
+    $('wallEditActions').classList.toggle('hidden', type !== 'wall');
     $('swingToggleBtn').classList.add('hidden');
     if (type === 'wall') {
       var idx = walls.findIndex(function (w) { return w.id === selectedWallId; });
-      $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
+      $('sheetKicker').textContent = 'MODIFICA MURO ' + wallReference(idx) + ' · ' + (idx + 1) + ' DI ' + walls.length;
     } else {
       var o = openings.find(function (x) { return x.id === currentOpeningId; });
       $('swingToggleBtn').classList.toggle('hidden', !(o && o.type === 'door'));
@@ -1155,6 +1261,8 @@ import {
     $('sheetBackdrop').classList.add('hidden');
     $('cornerToggleBtn').classList.add('hidden');
     $('swingToggleBtn').classList.add('hidden');
+    $('wallEditActions').classList.add('hidden');
+    $('deleteWallBtn').classList.add('hidden');
     $('deleteOpeningBtn').classList.add('hidden');
     numberText = '';
     updateSheetValue();
@@ -2655,6 +2763,10 @@ import {
     if (e.isPrimary === false) return;
     e.preventDefault();
     var p = point(e);
+    if (wallMoveMode) {
+      commitWallEndpointMove(p);
+      return;
+    }
     if (roomPickMode) {
       handleRoomPick(p);
       return;
@@ -2726,6 +2838,9 @@ import {
   $('laterBtn').addEventListener('click', later);
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
   $('swingToggleBtn').addEventListener('click', toggleDoorSwing);
+  $('moveWallStartBtn').addEventListener('click', function () { startWallEndpointMove('a'); });
+  $('moveWallEndBtn').addEventListener('click', function () { startWallEndpointMove('b'); });
+  $('deleteWallBtn').addEventListener('click', deleteSelectedWall);
   $('deleteOpeningBtn').addEventListener('click', deleteCurrentOpening);
   $('zoomOutBtn').addEventListener('click', function () { setZoom(viewZoom / 1.25); });
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
