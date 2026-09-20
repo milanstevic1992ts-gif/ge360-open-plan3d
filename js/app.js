@@ -462,7 +462,7 @@
 
   function confirmSheet() {
     var meters = Number(numberText.replace(',', '.'));
-    if (!Number.isFinite(meters) || meters <= 0) return toast('Inserisci una misura');
+    if (!numberText.trim() || !Number.isFinite(meters) || (sheetType === 'opening-offset' ? meters < 0 : meters <= 0)) return toast('Inserisci una misura');
 
     if (sheetType === 'wall') {
       checkpoint();
@@ -495,7 +495,14 @@
       checkpoint();
       var op2 = openings.find(function (o) { return o.id === currentOpeningId; });
       if (op2) {
-        op2.offsetCm = Math.round(meters * 100);
+        var ow = walls.find(function (w) { return w.id === op2.wallId; });
+        var offsetCm = Math.round(meters * 100);
+        if (ow && ow.lengthCm && offsetCm + op2.widthCm > ow.lengthCm) {
+          toast('Non entra nel muro: riduci la distanza');
+          vibrate(80);
+          return;
+        }
+        op2.offsetCm = offsetCm;
         recalcOpeningPosition(op2);
       }
       currentOpeningId = null;
