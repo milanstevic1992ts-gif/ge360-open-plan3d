@@ -77,3 +77,16 @@ test('interventi hanno preset, stile grafico e quantità strutturata',()=>{
   assert.match(app,/kind: 'intervention'/);
   assert.match(app,/workItems: workItems/);
 });
+
+
+test('modifica muri espone spostamento estremi ed eliminazione sicura',()=>{
+  assert.match(html,/id="moveWallStartBtn"/);
+  assert.match(html,/id="moveWallEndBtn"/);
+  assert.match(html,/id="deleteWallBtn"/);
+  assert.match(app,/function deleteSelectedWall\(/);
+  assert.match(app,/function startWallEndpointMove\(/);
+  assert.match(app,/function commitWallEndpointMove\(/);
+  assert.match(app,/openings = openings\.filter\(function \(o\) \{ return o\.wallId !== wall\.id; \}\)/);
+  assert.match(app,/rawStrokes = rawStrokes\.filter/);
+  assert.match(app,/candidate\[end\] = \{ x: p\.x, y: p\.y \}/);
+});
