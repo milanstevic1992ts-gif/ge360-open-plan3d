@@ -102,7 +102,9 @@ test('editor avanzato espone redo e selezione diretta elementi',()=>{
   assert.match(app,/function redo\(/);
   assert.match(app,/function armLongPress\(/);
   assert.match(app,/function showObjectActionBar\(/);
-  assert.match(app,/function commitOpeningMove\(/);
+  assert.match(app,/function startOpeningMoveDrag\(/);
+  assert.match(app,/function updateOpeningMoveDrag\(/);
+  assert.match(app,/function finishOpeningMoveDrag\(/);
 });
 
 test('vista interventi è separata dal rilievo e supporta annotazioni trascinabili',()=>{
