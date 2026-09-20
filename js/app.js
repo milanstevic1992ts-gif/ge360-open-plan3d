@@ -2099,10 +2099,71 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     return (face && face.wallIds ? face.wallIds.slice().sort().join('|') : '');
   }
 
+  function photoCountForTarget(type, id) {
+    return photoRefs.filter(function (p) {
+      return p.targetType === type && String(p.targetId) === String(id);
+    }).length;
+  }
+
+  function openRoomEditorForFace(face, existing, autoPrompt) {
+    if (!face) return;
+    pendingRoomFace = face;
+    var key = faceKey(face);
+    if (!existing) {
+      existing = rooms.find(function (r) {
+        return r.faceKey === key || faceKey({ wallIds:r.wallIds }) === key;
+      }) || null;
+    }
+    pendingRoomId = existing ? existing.id : null;
+    selectedRoomName = existing && !existing.needsNaming ? existing.name : '';
+    $('roomCustomName').value = existing && existing.custom && !existing.needsNaming ? existing.name : '';
+    document.querySelectorAll('[data-room-name]').forEach(function (b) {
+      b.classList.toggle('selected', !!(existing && !existing.needsNaming && existing.name === b.dataset.roomName));
+    });
+    $('roomModalTitle').textContent = autoPrompt ? 'Nuovo ambiente rilevato' : 'Che stanza è?';
+    $('roomAutoHint').classList.toggle('hidden', !autoPrompt);
+    var count = existing ? photoCountForTarget('room', existing.id) : 0;
+    $('roomPhotoCount').textContent = count + (count === 1 ? ' foto' : ' foto');
+    $('roomPhotoBtn').disabled = !existing;
+    $('roomBackdrop').classList.remove('hidden');
+  }
+
+  function syncAutomaticRooms(promptNew) {
+    if (!walls.length) return [];
+    var faces = buildFaces(walls).filter(function (face) {
+      return face && face.quality !== 'verify' && Array.isArray(face.wallIds) && face.wallIds.length >= 3;
+    });
+    var result = syncDetectedRooms(
+      rooms,
+      faces,
+      function () { return uid('room'); },
+      new Date().toISOString()
+    );
+    rooms = result.rooms;
+    if (!result.created.length) return [];
+
+    surfaceCache = null;
+    persistActive();
+    updateUI();
+    render();
+
+    if (promptNew && $('roomBackdrop').classList.contains('hidden') && $('sheetBackdrop').classList.contains('hidden')) {
+      var created = result.created[0];
+      var face = faces.find(function (f) { return faceKey(f) === created.faceKey; }) || null;
+      if (face) {
+        setTimeout(function () {
+          openRoomEditorForFace(face, created, true);
+          vibrate(24);
+        }, 0);
+      }
+    } else {
+      toast(result.created.length === 1 ? 'Nuovo ambiente riconosciuto ✓' : result.created.length + ' ambienti riconosciuti ✓');
+    }
+    return result.created;
+  }
+
   function openRoomPicker() {
     if (!walls.length) return toast('Prima disegna la pianta');
-    // AMBIENTE deve restare una modalità di selezione sul rilievo,
-    // senza aprire o lasciare visibili pannelli di presentazione.
     closePresentation();
     closeSurfaces();
     cancelPickModes();
@@ -2121,20 +2182,27 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     }
     roomPickMode = false;
     $('roomBtn').classList.remove('active');
-    pendingRoomFace = face;
     var key = faceKey(face);
-    var existing = rooms.find(function (r) { return r.faceKey === key || faceKey({ wallIds: r.wallIds }) === key; });
-    pendingRoomId = existing ? existing.id : null;
-    selectedRoomName = existing ? existing.name : '';
-    $('roomCustomName').value = existing && existing.custom ? existing.name : '';
-    document.querySelectorAll('[data-room-name]').forEach(function (b) {
-      b.classList.toggle('selected', existing && existing.name === b.dataset.roomName);
-    });
-    $('roomBackdrop').classList.remove('hidden');
+    var existing = rooms.find(function (r) {
+      return r.faceKey === key || faceKey({ wallIds:r.wallIds }) === key;
+    }) || null;
+    if (!existing) {
+      var synced = syncDetectedRooms(
+        rooms,
+        [face],
+        function () { return uid('room'); },
+        new Date().toISOString()
+      );
+      rooms = synced.rooms;
+      existing = synced.created[0] || null;
+    }
+    openRoomEditorForFace(face, existing, false);
   }
 
   function closeRoomModal() {
     $('roomBackdrop').classList.add('hidden');
+    $('roomAutoHint').classList.add('hidden');
+    $('roomModalTitle').textContent = 'Che stanza è?';
     pendingRoomFace = null;
     pendingRoomId = null;
     selectedRoomName = '';
@@ -2163,13 +2231,26 @@ import { buildProgressiveTakeoff } from './takeoff.js';
     var key = wallIds.join('|');
     var room = pendingRoomId ? rooms.find(function (r) { return r.id === pendingRoomId; }) : null;
     if (!room) {
-      room = { id: uid('room'), name: name, wallIds: wallIds, faceKey: key, custom: !!custom };
+      room = {
+        id:uid('room'),
+        name:name,
+        wallIds:wallIds,
+        faceKey:key,
+        custom:!!custom,
+        autoDetected:false,
+        needsNaming:false,
+        geometryMissing:false,
+        namedAt:new Date().toISOString()
+      };
       rooms.push(room);
     } else {
       room.name = name;
       room.wallIds = wallIds;
       room.faceKey = key;
       room.custom = !!custom;
+      room.needsNaming = false;
+      room.geometryMissing = false;
+      room.namedAt = new Date().toISOString();
     }
     notes.forEach(function (note) {
       if (['room', 'floor', 'ceiling'].indexOf(note.targetType) !== -1) {
@@ -2198,6 +2279,13 @@ import { buildProgressiveTakeoff } from './takeoff.js';
         note.targetLabel = (linkedOpening.type === 'door' ? 'Porta' : 'Finestra') + ' · ' + room.name;
         note.updatedAt = new Date().toISOString();
       }
+    });
+    photoRefs.forEach(function (photo) {
+      if (photo.targetType !== 'room') return;
+      if (String(photo.targetId) !== String(key) && String(photo.targetId) !== String(room.id)) return;
+      photo.targetId = room.id;
+      photo.targetLabel = room.name;
+      photo.roomName = room.name;
     });
     surfaceCache = null;
     persistActive();
