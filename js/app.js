@@ -734,7 +734,11 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     requestAnimationFrame(function () { $('noteRawText').focus(); });
   }
 
-  function closeNoteEditor() {
+  function closeNoteEditor(saveDraft) {
+    if (saveDraft !== false && pendingNoteTarget) {
+      var raw = $('noteRawText').value.trim();
+      if (raw) saveCurrentNote(true);
+    }
     $('noteEditorBackdrop').classList.add('hidden');
     pendingNoteTarget = null;
     currentNoteId = null;
@@ -861,7 +865,7 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
     notes = notes.filter(function (n) { return n.id !== note.id; });
     persistActive();
     updateUI();
-    closeNoteEditor();
+    closeNoteEditor(false);
     toast('Appunto eliminato');
   }
 
@@ -1402,14 +1406,32 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
       room.custom = !!custom;
     }
     notes.forEach(function (note) {
-      if (['room', 'floor', 'ceiling'].indexOf(note.targetType) === -1) return;
-      if (note.targetId !== key && note.targetId !== room.id) return;
-      var prefix = note.targetType === 'floor' ? 'Pavimento' : note.targetType === 'ceiling' ? 'Soffitto' : 'Ambiente';
-      note.targetId = room.id;
-      note.targetKey = noteTargetKey(note.targetType, room.id);
-      note.roomName = room.name;
-      note.targetLabel = prefix + ' · ' + room.name;
-      note.updatedAt = new Date().toISOString();
+      if (['room', 'floor', 'ceiling'].indexOf(note.targetType) !== -1) {
+        if (note.targetId !== key && note.targetId !== room.id) return;
+        var prefix = note.targetType === 'floor' ? 'Pavimento' : note.targetType === 'ceiling' ? 'Soffitto' : 'Ambiente';
+        note.targetId = room.id;
+        note.targetKey = noteTargetKey(note.targetType, room.id);
+        note.roomName = room.name;
+        note.targetLabel = prefix + ' · ' + room.name;
+        note.updatedAt = new Date().toISOString();
+        return;
+      }
+
+      if (note.targetType === 'wall' && wallIds.indexOf(note.targetId) !== -1) {
+        var wi = walls.findIndex(function (w) { return w.id === note.targetId; });
+        note.roomName = room.name;
+        note.targetLabel = 'Muro ' + (wi + 1) + ' · ' + room.name;
+        note.updatedAt = new Date().toISOString();
+        return;
+      }
+
+      if (note.targetType === 'opening') {
+        var linkedOpening = openings.find(function (o) { return o.id === note.targetId; });
+        if (!linkedOpening || wallIds.indexOf(linkedOpening.wallId) === -1) return;
+        note.roomName = room.name;
+        note.targetLabel = (linkedOpening.type === 'door' ? 'Porta' : 'Finestra') + ' · ' + room.name;
+        note.updatedAt = new Date().toISOString();
+      }
     });
     surfaceCache = null;
     persistActive();
@@ -2174,8 +2196,8 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
   document.querySelectorAll('[data-note-target]').forEach(function (b) {
     b.addEventListener('click', function () { startNotePick(b.dataset.noteTarget); });
   });
-  $('closeNoteEditorBtn').addEventListener('click', closeNoteEditor);
-  $('noteEditorBackdrop').addEventListener('click', function (e) { if (e.target === $('noteEditorBackdrop')) closeNoteEditor(); });
+  $('closeNoteEditorBtn').addEventListener('click', function () { closeNoteEditor(true); });
+  $('noteEditorBackdrop').addEventListener('click', function (e) { if (e.target === $('noteEditorBackdrop')) closeNoteEditor(true); });
   $('saveRawNoteBtn').addEventListener('click', function () { saveCurrentNote(false); });
   $('rewriteNoteBtn').addEventListener('click', rewriteCurrentNote);
   $('deleteNoteBtn').addEventListener('click', deleteCurrentNote);
