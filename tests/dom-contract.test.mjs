@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const html=fs.readFileSync(new URL('../index.html',import.meta.url),'utf8');
+const app=fs.readFileSync(new URL('../js/app.js',import.meta.url),'utf8');
+
+test('DOM non contiene id duplicati',()=>{
+  const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);
+  const duplicates=ids.filter((id,i)=>ids.indexOf(id)!==i);
+  assert.deepEqual([...new Set(duplicates)],[]);
+});
+
+test('DOM contiene hook Elaborati obbligatori',()=>{
+  for(const id of ['rawTabBtn','processedTabBtn','processedWorkspace','elaborateBtn','processNowBtn','processedCard','open2dBtn','open3dBtn','shareProcessedBtn','saveProcessedBtn','downloadAllBtn','versionsList','missingMeasuresBackdrop','viewer2dBackdrop','viewer3dBackdrop']){
+    assert.match(html,new RegExp('id="'+id+'"'));
+  }
+});
+
+test('app conserva storage legacy e funzioni editor principali',()=>{
+  assert.match(app,/ge360-rilievo-library-v3/);
+  assert.match(app,/ge360-rilievo-settings-v1/);
+  for(const fn of ['commitStroke','editWallMeasurement','placeOpening','deleteCurrentOpening','openSolver','openRoomPicker','openSurfaces','openPresentation','undo']){
+    assert.match(app,new RegExp('function '+fn+'\\b'));
+  }
+});
+
+test('app usa backend client e non fetch sparsi per elaborazione',()=>{
+  assert.match(app,/BackendClient/);
+  assert.match(app,/startProcessing/);
+  assert.match(app,/pollProcessing/);
+  assert.match(app,/PROCESS_POLL_MS = 2000/);
+});
+
+test('chiave API non è hardcoded come valore',()=>{
+  assert.doesNotMatch(app,/apiKey\s*:\s*['"][A-Za-z0-9_-]{16,}['"]/);
+});
+
+test('menu mantiene SISTEMA PIANTA e aggiunge ELABORA RILIEVO',()=>{
+  assert.match(html,/SISTEMA PIANTA/);
+  assert.match(html,/ELABORA RILIEVO/);
+});
