@@ -2,7 +2,7 @@ name: Geometry Engine Check
 
 on:
   push:
-    branches: [ main, geometry-solver-integration ]
+    branches: [ main, geometry-solver-integration, rooms-surfaces-v5 ]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,9 @@ jobs:
       - name: Check frontend module syntax
         run: |
           cp js/app.js /tmp/ge360-app.mjs
+          cp js/room-surfaces.js /tmp/room-surfaces.mjs
           node --check /tmp/ge360-app.mjs
+          node --check /tmp/room-surfaces.mjs
 
       - name: Geometry engine smoke tests
         run: |
@@ -57,6 +59,35 @@ jobs:
           assert.ok(Math.abs(d1.centerFromACm - 160) < 1e-6);
 
           console.log('GE360 geometry smoke tests OK');
+          NODE
+
+      - name: Room and surface smoke tests
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { buildFaces, findFaceAtPoint, calculateSurfaces } from './js/room-surfaces.js';
+
+          const walls = [
+            { id:'w1', a:{x:0,y:0}, b:{x:400,y:0}, lengthCm:400 },
+            { id:'w2', a:{x:400,y:0}, b:{x:400,y:300}, lengthCm:300 },
+            { id:'w3', a:{x:400,y:300}, b:{x:0,y:300}, lengthCm:400 },
+            { id:'w4', a:{x:0,y:300}, b:{x:0,y:0}, lengthCm:300 }
+          ];
+
+          const faces = buildFaces(walls);
+          assert.equal(faces.length, 1);
+          assert.ok(Math.abs(faces[0].area - 120000) < 1e-6);
+          assert.ok(findFaceAtPoint(walls, {x:200,y:150}));
+
+          const room = { id:'r1', name:'Cucina', wallIds:['w1','w2','w3','w4'] };
+          const m = calculateSurfaces(walls, [room], 2.7);
+          assert.ok(Math.abs(m.totals.floorM2 - 12) < 1e-9);
+          assert.ok(Math.abs(m.totals.ceilingM2 - 12) < 1e-9);
+          assert.ok(Math.abs(m.totals.wallsM2 - 37.8) < 1e-9);
+          assert.ok(Math.abs(m.totals.wallsCeilingM2 - 49.8) < 1e-9);
+          assert.equal(m.roomMetrics[0].room.name, 'Cucina');
+
+          console.log('GE360 room/surface smoke tests OK');
           NODE
 
       - name: Verify engine stays isolated
