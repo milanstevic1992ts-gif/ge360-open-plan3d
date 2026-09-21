@@ -21,6 +21,9 @@ jobs:
           cp "$BUILD_TOOLS/apksigner" android-signing-tools/
           cp "$BUILD_TOOLS/zipalign" android-signing-tools/
           cp "$BUILD_TOOLS/lib/apksigner.jar" android-signing-tools/lib/
+          LIBCPP="$(find "$BUILD_TOOLS" -type f -name "libc++.so" | head -1)"
+          test -n "$LIBCPP"
+          cp "$LIBCPP" android-signing-tools/libc++.so
           chmod +x android-signing-tools/apksigner android-signing-tools/zipalign
           basename "$BUILD_TOOLS" > android-signing-tools/version.txt
 
