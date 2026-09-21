@@ -9,7 +9,7 @@ const apiKey=process.env.GE360_E2E_API_KEY || 'ge360-cross-contract-key';
 
 const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
 const dom=new JSDOM(html);
-for(const id of ['calcSendBtn','resultCanvas','serverBadge','scanLaserBtn','photoInput']){
+for(const id of ['calcSendBtn','resultCanvas','serverBadge','scanLaserBtn','photoInput', 'worksBtn', 'worksScreen', 'workSearchInput']){
   assert.ok(dom.window.document.getElementById(id), 'missing DOM contract: '+id);
 }
 

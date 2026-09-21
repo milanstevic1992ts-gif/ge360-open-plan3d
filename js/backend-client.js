@@ -139,6 +139,10 @@ export function createBackendClient({ baseUrl, apiKey, fetchImpl, timeoutMs = 15
     return request('/plans/' + encodeURIComponent(planId) + '/photos');
   }
 
-  return { api, request, submitPlan, waitForJob, fetchResult, processPlan, downloadArtifact, uploadPhoto, listPhotos };
+  async function fetchWorkCatalog() {
+    return request('/work-catalog');
+  }
+
+  return { api, request, submitPlan, waitForJob, fetchResult, processPlan, downloadArtifact, uploadPhoto, listPhotos, fetchWorkCatalog };
 }
 

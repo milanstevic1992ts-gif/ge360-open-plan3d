@@ -18,6 +18,7 @@ export function compactResult(status, processed, meta = {}) {
     lastError: status ? status.lastError || null : null,
     totals,
     ai: (p.metadata && p.metadata.ai) || null,
+    works: (p.metadata && p.metadata.works) || [],
     walls: (p.walls || []).map(w => ({
       id: w.id,
       start: { x: r(w.start.x), y: r(w.start.y) },

@@ -10,6 +10,7 @@ import { createOfflineQueue, isRetryableBackendError } from './offline-queue.js'
 import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetKey } from './photo-store.js';
 import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDevice, restoreLaserDevice, listenLaser } from './laser-client.js';
 import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForReference } from './opening-presets.js';
+import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loadWorkUsage, recordWorkUse, searchWorkCatalog } from './work-catalog.js';
 
 (function () {
   'use strict';
@@ -53,6 +54,10 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
   var surfaceCache = null;
   var presentationModel = null;
   var notes = [];
+  var works = [];
+  var workCatalogState = loadCachedWorkCatalog(localStorage);
+  var workCatalog = workCatalogState.works || BUNDLED_WORK_CATALOG;
+  var workTarget = { type: 'plan', id: null, name: 'Tutta la casa', roomType: 'altro' };
   var notePickMode = null;
   var pendingNoteTarget = null;
   var currentNoteId = null;
@@ -160,6 +165,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
       windows: os.filter(function (o) { return o.type === 'window'; }).length,
       rooms: plan ? (plan.rooms || []).length : rooms.length,
       notes: plan ? (plan.notes || []).length : notes.length,
+      works: plan ? (plan.works || []).length : works.length,
       photos: plan ? (plan.photos || []).length : 0,
       floorM2: Number.isFinite(serverFloor) ? serverFloor :
         (plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null),
@@ -177,6 +183,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     plan.openings = clone(openings);
     plan.rooms = clone(rooms);
     plan.notes = clone(notes);
+    plan.works = clone(works);
     plan.wallHeightM = wallHeightM;
     plan.diagonals = clone(diagonals);
     plan.wallThicknessCm = wallThicknessCm;
@@ -217,6 +224,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
       openings: [],
       rooms: [],
       notes: [],
+      works: [],
       photos: [],
       wallHeightM: 2.70,
       diagonals: [],
@@ -238,6 +246,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     openings = clone(plan.openings || []);
     rooms = clone(plan.rooms || []);
     notes = clone(plan.notes || []);
+    works = clone(plan.works || []);
     diagonals = clone(plan.diagonals || []);
     quoteFirst = null;
     currentDiagonalId = null;
@@ -307,7 +316,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
       h3.textContent = plan.name || 'Rilievo';
       var meta = document.createElement('div');
       meta.className = 'plan-meta';
-      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (s.photos ? s.photos + ' foto · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m²' + (s.authoritative ? ' server · ' : ' indicativi · ') : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
+      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.works ? s.works + ' lavori · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (s.photos ? s.photos + ' foto · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m²' + (s.authoritative ? ' server · ' : ' indicativi · ') : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
       if (offlineQueue.has(plan.id)) {
         var pendingSync = document.createElement('span');
         pendingSync.className = 'backend-badge pending';
@@ -379,7 +388,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
   }
 
   function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, diagonals: diagonals, wallHeightM: wallHeightM }));
+    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, works: works, diagonals: diagonals, wallHeightM: wallHeightM }));
     if (history.length > 30) history.shift();
   }
 
@@ -391,6 +400,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     openings = data.openings || [];
     rooms = data.rooms || [];
     notes = data.notes || [];
+    works = data.works || [];
     diagonals = data.diagonals || [];
     wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
     surfaceCache = null;
@@ -3149,7 +3159,8 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
         status: compact.status,
         syncStatus: 'SYNCED',
         result: compact,
-        lastError: null
+        lastError: null,
+        reportDirty: false
       };
       offlineQueue.remove(plan.id);
       saveLibrary();
@@ -3370,7 +3381,8 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     toast('Scarico ' + kind.toUpperCase() + '…');
     try {
       var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, kind);
-      var name = 'GE360-' + String(plan.name || 'rilievo').replace(/[^a-z0-9_-]+/gi, '-') + '.' + kind;
+      var safeName = String(plan.name || 'rilievo').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'rilievo';
+      var name = (kind === 'pdf' ? safeName : 'GE360-' + safeName) + '.' + kind;
       await saveBlob(blob, name);
     } catch (e) {
       if (e && e.name === 'AbortError') return;
@@ -3392,6 +3404,197 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     a.download = 'GE360-' + (plan.name || 'rilievo').replace(/[^a-z0-9_-]+/gi, '-') + '.json';
     a.click();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+
+  function workTargetLabel() {
+    return workTarget.type === 'plan' ? 'Tutta la casa' : workTarget.name;
+  }
+
+  function roomAreaForWork(roomId) {
+    var plan = currentPlan();
+    var result = plan && plan.backend && plan.backend.result;
+    var serverRoom = result && (result.rooms || []).find(function (r) { return r.roomId === roomId; });
+    if (serverRoom && Number.isFinite(serverRoom.floorAreaM2)) return serverRoom.floorAreaM2;
+    var cache = surfaceCache || refreshSurfaceCache();
+    var metric = cache && (cache.roomMetrics || []).find(function (m) { return m.room && m.room.id === roomId; });
+    return metric && Number.isFinite(metric.floorM2) ? metric.floorM2 : null;
+  }
+
+  async function refreshWorkCatalogFromServer() {
+    if (!settings.serverUrl || !settings.apiKey) return;
+    try {
+      var data = await backendClient().fetchWorkCatalog();
+      if (data && Array.isArray(data.works) && data.works.length >= 20) {
+        workCatalogState = data;
+        workCatalog = data.works;
+        saveCachedWorkCatalog(data, localStorage);
+        renderWorkSuggestions();
+      }
+    } catch (_) {}
+  }
+
+  function openWorks() {
+    closeTools();
+    persistActive();
+    var plan = currentPlan();
+    if (!plan) return;
+    $('worksPlanName').textContent = plan.name || 'Rilievo';
+    workTarget = { type: 'plan', id: null, name: 'Tutta la casa', roomType: 'altro' };
+    $('workSearchInput').value = '';
+    $('worksScreen').classList.remove('hidden');
+    renderWorkRooms();
+    renderWorkSuggestions();
+    renderSelectedWorks();
+    setTimeout(function () { $('workSearchInput').focus(); }, 80);
+    refreshWorkCatalogFromServer();
+  }
+
+  function closeWorks() {
+    persistActive();
+    $('worksScreen').classList.add('hidden');
+  }
+
+  function renderWorkRooms() {
+    var wrap = $('worksRoomStrip');
+    wrap.innerHTML = '';
+    function chip(label, sub, target) {
+      var b = document.createElement('button');
+      b.className = 'work-room-chip' + (workTarget.type === target.type && workTarget.id === target.id ? ' active' : '');
+      b.textContent = label;
+      if (sub) {
+        var sm = document.createElement('small');
+        sm.textContent = sub;
+        b.appendChild(sm);
+      }
+      b.addEventListener('click', function () {
+        workTarget = target;
+        $('workSearchInput').value = '';
+        renderWorkRooms();
+        renderWorkSuggestions();
+        renderSelectedWorks();
+        $('workSearchInput').focus();
+      });
+      wrap.appendChild(b);
+    }
+    chip('TUTTA LA CASA', works.filter(function (w) { return w.targetType === 'plan'; }).length + ' lavori',
+      { type:'plan', id:null, name:'Tutta la casa', roomType:'altro' });
+    rooms.forEach(function (room) {
+      var count = works.filter(function (w) { return w.targetType === 'room' && w.targetId === room.id; }).length;
+      var area = roomAreaForWork(room.id);
+      chip(String(room.name || 'Ambiente').toUpperCase(),
+        (Number.isFinite(area) ? area.toFixed(1).replace('.', ',') + ' m² · ' : '') + count + ' lavori',
+        { type:'room', id:room.id, name:room.name || 'Ambiente', roomType:room.type || roomTypeFromName(room.name) });
+    });
+  }
+
+  function renderWorkSuggestions() {
+    if ($('worksScreen').classList.contains('hidden')) return;
+    $('worksTargetTitle').textContent = workTargetLabel();
+    var query = $('workSearchInput').value || '';
+    var usage = loadWorkUsage(localStorage);
+    var suggestions = searchWorkCatalog(workCatalog, query, {
+      usage: usage,
+      roomType: workTarget.roomType || 'altro',
+      limit: query.trim() ? 10 : 8
+    });
+    var wrap = $('workSuggestions');
+    wrap.innerHTML = '';
+    suggestions.forEach(function (item) {
+      var b = document.createElement('button');
+      b.className = 'work-suggestion';
+      var left = document.createElement('span');
+      var title = document.createElement('b');
+      title.textContent = item.label;
+      var meta = document.createElement('small');
+      meta.textContent = item.category + (item.unit ? ' · ' + item.unit : '');
+      left.appendChild(title); left.appendChild(meta);
+      var plus = document.createElement('span');
+      plus.className = 'plus'; plus.textContent = '+';
+      b.appendChild(left); b.appendChild(plus);
+      b.addEventListener('click', function () { addWorkItem(item); });
+      wrap.appendChild(b);
+    });
+  }
+
+  function addWorkItem(item) {
+    var duplicate = works.find(function (w) {
+      return w.catalogId === item.id && w.targetType === workTarget.type && w.targetId === workTarget.id;
+    });
+    if (duplicate) {
+      toast('Già aggiunto qui');
+      $('workSearchInput').value = '';
+      renderWorkSuggestions();
+      $('workSearchInput').focus();
+      return;
+    }
+    checkpoint();
+    works.push({
+      id: uid('work'),
+      catalogId: item.id,
+      label: item.label,
+      targetType: workTarget.type,
+      targetId: workTarget.id,
+      targetName: workTarget.name,
+      quantityRule: item.quantityRule,
+      unit: item.unit || '',
+      createdAt: new Date().toISOString()
+    });
+    recordWorkUse(item.id, localStorage);
+    var plan = currentPlan();
+    if (plan && plan.backend) plan.backend.reportDirty = true;
+    persistActive();
+    $('workSearchInput').value = '';
+    renderWorkRooms();
+    renderWorkSuggestions();
+    renderSelectedWorks();
+    $('workSearchInput').focus();
+    vibrate(15);
+  }
+
+  function removeWorkItem(id) {
+    checkpoint();
+    works = works.filter(function (w) { return w.id !== id; });
+    var plan = currentPlan();
+    if (plan && plan.backend) plan.backend.reportDirty = true;
+    persistActive();
+    renderWorkRooms();
+    renderSelectedWorks();
+  }
+
+  function renderSelectedWorks() {
+    var list = works.filter(function (w) {
+      return w.targetType === workTarget.type && w.targetId === workTarget.id;
+    });
+    $('worksSelectedCount').textContent = String(list.length);
+    var wrap = $('worksSelectedList');
+    wrap.innerHTML = '';
+    if (!list.length) {
+      var empty = document.createElement('div');
+      empty.className = 'work-selected-empty';
+      empty.textContent = 'Nessuna lavorazione aggiunta';
+      wrap.appendChild(empty);
+      return;
+    }
+    list.forEach(function (work) {
+      var row = document.createElement('div');
+      row.className = 'work-selected';
+      var left = document.createElement('span');
+      var b = document.createElement('b'); b.textContent = work.label;
+      var sm = document.createElement('small');
+      sm.textContent = work.unit ? 'Quantità calcolata dal backend · ' + work.unit : 'Da verificare nel report';
+      left.appendChild(b); left.appendChild(sm);
+      var del = document.createElement('button'); del.textContent = '×';
+      del.addEventListener('click', function () { removeWorkItem(work.id); });
+      row.appendChild(left); row.appendChild(del);
+      wrap.appendChild(row);
+    });
+  }
+
+  function processFromWorks() {
+    closeWorks();
+    if (settings.serverUrl && settings.apiKey) openCalc();
+    else exportJson();
   }
 
   function openTools() {
@@ -3416,6 +3619,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     openings = [];
     rooms = [];
     notes = [];
+    works = [];
     diagonals = [];
     quoteFirst = null;
     notePickMode = null;
@@ -3439,6 +3643,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
     $('notesBtn').classList.toggle('hidden', !has);
+    $('worksBtn').classList.toggle('hidden', !has);
     $('calcBtn').classList.toggle('hidden', !has);
     $('quoteBtn').classList.toggle('hidden', !has);
     var notesTitle = $('notesBtn').querySelector('b');
@@ -3734,9 +3939,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
   $('windowBtn').addEventListener('click', function () { setMode('window'); });
   $('measureBtn').addEventListener('click', startMeasureMode);
-  $('doneBtn').addEventListener('click', function () {
-    if (settings.serverUrl && settings.apiKey) openCalc(); else exportJson();
-  });
+  $('doneBtn').addEventListener('click', openWorks);
   $('undoBtn').addEventListener('click', undo);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
   $('toolsBtn').addEventListener('click', openTools);
@@ -3755,6 +3958,9 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
       if (parts.length === 2 && parts.every(Number.isFinite)) setRectRoomPreset(parts[0], parts[1]);
     });
   });
+  $('closeWorksBtn').addEventListener('click', closeWorks);
+  $('worksProcessBtn').addEventListener('click', processFromWorks);
+  $('workSearchInput').addEventListener('input', renderWorkSuggestions);
   $('closeOpeningQuickBtn').addEventListener('click', function () { closeOpeningQuick(true); });
   $('openingQuickBackdrop').addEventListener('click', function (e) { if (e.target === $('openingQuickBackdrop')) closeOpeningQuick(true); });
   document.querySelectorAll('#openingQuickBackdrop [data-opening-preset]').forEach(function (button) {
@@ -3772,6 +3978,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
   $('zoomInBtn').addEventListener('click', function () { setZoom(viewZoom * 1.25); });
   $('zoomResetBtn').addEventListener('click', resetView);
   $('rotateBtn').addEventListener('click', rotateView);
+  $('worksBtn').addEventListener('click', openWorks);
   $('notesBtn').addEventListener('click', function () { runTool(openNoteTargetChooser); });
   $('roomBtn').addEventListener('click', function () { runTool(openRoomPicker); });
   $('surfacesBtn').addEventListener('click', function () { runTool(openSurfaces); });

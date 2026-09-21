@@ -106,6 +106,7 @@ export function buildPlanPayload(plan, extra = {}) {
     rooms,
     diagonals,
     notes: plan.notes || [],
+    works: plan.works || [],
     wallHeightM: positive(plan.wallHeightM) || 2.70,
     wallReference,
     surfaces: plan.surfaceSummary || null

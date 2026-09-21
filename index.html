@@ -60,6 +60,30 @@
     </footer>
   </section>
 
+  <section id="worksScreen" class="works-screen hidden" aria-label="Lavorazioni del rilievo">
+    <header class="works-head">
+      <button id="closeWorksBtn" class="icon-btn light" aria-label="Torna alla pianta">‹</button>
+      <div><div class="eyebrow dark">CANTIERE</div><h2>Lavori</h2><p id="worksPlanName">Rilievo</p></div>
+      <button id="worksProcessBtn" class="save-btn">ELABORA</button>
+    </header>
+    <div class="works-room-strip" id="worksRoomStrip"></div>
+    <main class="works-body">
+      <section class="works-search-card">
+        <div id="worksTargetTitle" class="works-target-title">Tutta la casa</div>
+        <label class="works-search">
+          <span>⌕</span>
+          <input id="workSearchInput" type="search" autocomplete="off" placeholder="Scrivi: piastrelle, rasatura, porta...">
+        </label>
+        <div class="works-search-hint">Scrivi poche lettere e tocca il suggerimento. Il campo si svuota da solo.</div>
+        <div id="workSuggestions" class="work-suggestions"></div>
+      </section>
+      <section class="works-selected-card">
+        <div class="works-section-head"><b>AGGIUNTI</b><span id="worksSelectedCount">0</span></div>
+        <div id="worksSelectedList" class="works-selected-list"></div>
+      </section>
+    </main>
+  </section>
+
   <div id="toolsBackdrop" class="tools-backdrop hidden">
     <section class="tools-sheet" aria-label="Strumenti rilievo">
       <div class="grabber"></div>
@@ -71,7 +95,8 @@
         <button id="closeToolsBtn" class="round-btn light" aria-label="Chiudi strumenti">✕</button>
       </div>
       <div class="tools-grid">
-        <button id="notesBtn" class="tool-card notes-btn hidden"><span>📝</span><b>APPUNTI</b><small>Lavorazioni e note</small></button>
+        <button id="worksBtn" class="tool-card works-btn hidden"><span>🛠️</span><b>LAVORI</b><small>Segna velocemente cosa c'è da fare</small></button>
+        <button id="notesBtn" class="tool-card notes-btn hidden"><span>📝</span><b>APPUNTI</b><small>Note, foto e dettagli</small></button>
         <button id="presentBtn" class="tool-card present-btn hidden"><span>👁</span><b>PRESENTA</b><small>Vista pulita</small></button>
         <button id="roomRectBtn" class="tool-card room-rect-btn"><span>▭</span><b>STANZA A MISURA</b><small>Es. 3 × 2 m e posiziona</small></button>
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
