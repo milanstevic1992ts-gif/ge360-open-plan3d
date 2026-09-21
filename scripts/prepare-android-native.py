@@ -35,6 +35,7 @@ public class MainActivity extends BridgeActivity {
 
 gradle = APP / "build.gradle"
 text = gradle.read_text(encoding="utf-8")
+text = text.replace("minSdkVersion rootProject.ext.minSdkVersion", "minSdkVersion 26")
 marker = "// GE360_DIRECT_BRIDGE_NATIVE"
 if marker not in text:
     text += """
