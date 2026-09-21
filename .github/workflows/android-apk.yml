@@ -94,3 +94,21 @@ jobs:
           name: GE360-Rilievo-Release-Unsigned
           path: GE360-Rilievo-release-unsigned.apk
           retention-days: 14
+
+      - name: Package official Android signing tools
+        run: |
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          test -x "$BUILD_TOOLS/apksigner"
+          test -f "$BUILD_TOOLS/lib/apksigner.jar"
+          mkdir -p android-signing-tools/lib
+          cp "$BUILD_TOOLS/apksigner" android-signing-tools/
+          cp "$BUILD_TOOLS/lib/apksigner.jar" android-signing-tools/lib/
+          if [[ -x "$BUILD_TOOLS/zipalign" ]]; then cp "$BUILD_TOOLS/zipalign" android-signing-tools/; fi
+          printf '%s\n' "$(basename "$BUILD_TOOLS")" > android-signing-tools/build-tools-version.txt
+
+      - name: Upload Android signing tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Signing-Tools
+          path: android-signing-tools
+          retention-days: 2
