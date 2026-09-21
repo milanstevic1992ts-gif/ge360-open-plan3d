@@ -109,8 +109,24 @@ export function createBackendClient({ baseUrl, apiKey, fetchImpl, timeoutMs = 15
     return Object.assign({ submission, job }, result);
   }
 
-  function downloadArtifact(planId, artifact) {
-    return request('/plans/' + encodeURIComponent(planId) + '/' + artifact, { as: 'blob', timeout: 30000 });
+  function downloadArtifact(planId, artifact, version = null) {
+    const id = encodeURIComponent(planId);
+    const path = version == null
+      ? '/plans/' + id + '/' + artifact
+      : '/plans/' + id + '/versions/' + encodeURIComponent(version) + '/' + artifact;
+    return request(path, { as: 'blob', timeout: 30000 });
+  }
+
+  async function listVersions(planId) {
+    return request('/plans/' + encodeURIComponent(planId) + '/versions');
+  }
+
+  async function fetchVersion(planId, version) {
+    const id = encodeURIComponent(planId);
+    const v = encodeURIComponent(version);
+    const metadata = await request('/plans/' + id + '/versions/' + v);
+    const processed = await request('/plans/' + id + '/versions/' + v + '/processed');
+    return { metadata, processed };
   }
 
   async function uploadPhoto(planId, blob, meta = {}) {
@@ -143,6 +159,6 @@ export function createBackendClient({ baseUrl, apiKey, fetchImpl, timeoutMs = 15
     return request('/work-catalog');
   }
 
-  return { api, request, submitPlan, waitForJob, fetchResult, processPlan, downloadArtifact, uploadPhoto, listPhotos, fetchWorkCatalog };
+  return { api, request, submitPlan, waitForJob, fetchResult, processPlan, downloadArtifact, listVersions, fetchVersion, uploadPhoto, listPhotos, fetchWorkCatalog };
 }
 

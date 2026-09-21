@@ -71,6 +71,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   var calcBusy = false;
   var resultPlanId = null;
   var resultHighlightWallId = null;
+  var resultOverride = null;
+  var resultOverrideVersion = null;
   var offlineQueue = createOfflineQueue(localStorage);
   var syncBusy = false;
   var photoCaptureTarget = null;
@@ -124,7 +126,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
 
   function loadAll() {
     library = parse(localStorage.getItem(LIBRARY_KEY), []);
-    library.forEach(function (plan) { if (!Array.isArray(plan.photos)) plan.photos = []; });
+    library.forEach(function (plan) {
+      if (!Array.isArray(plan.photos)) plan.photos = [];
+      if (plan.backend && !Array.isArray(plan.backend.localHistory)) plan.backend.localHistory = [];
+    });
     settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
     renderDashboard();
     updateServerBadge();
@@ -3118,7 +3123,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
             syncStatus: 'SYNCED',
             result: compact,
             lastError: null,
-            reportDirty: false
+            reportDirty: false,
+            localHistory: carryLocalResultHistory(plan, compact)
           };
           offlineQueue.remove(item.planId);
           saveLibrary();
@@ -3136,6 +3142,21 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       updateServerBadge();
       renderDashboard();
     }
+  }
+
+  function carryLocalResultHistory(plan, nextResult) {
+    var backend = plan && plan.backend ? plan.backend : {};
+    var rows = Array.isArray(backend.localHistory) ? clone(backend.localHistory) : [];
+    var previous = backend.result;
+    if (previous && previous.version && (!nextResult || previous.version !== nextResult.version)) {
+      rows = rows.filter(function (row) { return row && row.version !== previous.version; });
+      rows.unshift({
+        version: previous.version,
+        capturedAt: new Date().toISOString(),
+        result: clone(previous)
+      });
+    }
+    return rows.slice(0, 20);
   }
 
   async function runCalculation(id, fromModal) {
@@ -3161,7 +3182,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
         syncStatus: 'SYNCED',
         result: compact,
         lastError: null,
-        reportDirty: false
+        reportDirty: false,
+        localHistory: carryLocalResultHistory(plan, compact)
       };
       offlineQueue.remove(plan.id);
       saveLibrary();
@@ -3231,19 +3253,24 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     }
   }
 
-  function openResult(id) {
+  function openResult(id, options) {
     var plan = library.find(function (p) { return p.id === id; });
     if (!plan || !plan.backend || !plan.backend.result) return toast('Nessun calcolo disponibile');
     if (id === activePlanId) persistActive();
-    var res = plan.backend.result;
+    options = options || {};
+    resultOverride = options.result || null;
+    resultOverrideVersion = options.version || null;
+    var res = resultOverride || plan.backend.result;
     var planWalls = plan.walls || [];
     resultPlanId = id;
     resultHighlightWallId = null;
     var st = statusInfo(res.status);
     $('resultTitle').textContent = plan.name || 'Rilievo';
     $('resultStamp').textContent = st.label + (res.version ? ' · versione ' + res.version : '') + ' · ' + new Date(res.receivedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    var geometryStale = isResultStale(res, payloadFingerprint(planPayload(plan)));
-    var reportDirty = !!(plan.backend && plan.backend.reportDirty);
+    $('resultVersionBadge').textContent = 'VERSIONE ' + (res.version || '—') + (resultOverride ? ' · ARCHIVIO' : ' · CORRENTE');
+    $('resultHistoryNotice').classList.toggle('hidden', !resultOverride);
+    var geometryStale = resultOverride ? false : isResultStale(res, payloadFingerprint(planPayload(plan)));
+    var reportDirty = resultOverride ? false : !!(plan.backend && plan.backend.reportDirty);
     $('resultStale').classList.toggle('hidden', !geometryStale && !reportDirty);
     $('resultStale').firstChild.nodeValue = geometryStale
       ? 'Il rilievo è cambiato dopo questo calcolo. '
@@ -3333,12 +3360,141 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   function renderResultCanvas() {
     var plan = resultPlan();
     if (!plan || !plan.backend || !plan.backend.result) return;
-    drawBackendPlan($('resultCanvas'), plan.backend.result, { dpr: Math.min(3, window.devicePixelRatio || 1), highlightWallId: resultHighlightWallId });
+    var res = resultOverride || plan.backend.result;
+    drawBackendPlan($('resultCanvas'), res, { dpr: Math.min(3, window.devicePixelRatio || 1), highlightWallId: resultHighlightWallId });
   }
 
   function closeResult() {
     $('resultBackdrop').classList.add('hidden');
+    $('resultVersionsBackdrop').classList.add('hidden');
     resultPlanId = null;
+    resultOverride = null;
+    resultOverrideVersion = null;
+  }
+
+  function cachedVersionResult(plan, version) {
+    if (!plan || !plan.backend) return null;
+    if (plan.backend.result && plan.backend.result.version === version) return plan.backend.result;
+    var row = (plan.backend.localHistory || []).find(function (item) { return item && item.version === version; });
+    return row && row.result ? row.result : null;
+  }
+
+  function localVersionIndex(plan) {
+    var rows = [];
+    if (plan && plan.backend && plan.backend.result && plan.backend.result.version) {
+      rows.push({
+        version: plan.backend.result.version,
+        status: plan.backend.result.status,
+        completedAt: plan.backend.result.receivedAt,
+        totals: plan.backend.result.totals || null
+      });
+    }
+    (plan && plan.backend && plan.backend.localHistory || []).forEach(function (row) {
+      if (!row || !row.version || rows.some(function (x) { return x.version === row.version; })) return;
+      rows.push({
+        version: row.version,
+        status: row.result && row.result.status || 'ARCHIVED',
+        completedAt: row.result && row.result.receivedAt || row.capturedAt,
+        totals: row.result && row.result.totals || null
+      });
+    });
+    return rows.sort(function (a,b) { return b.version - a.version; });
+  }
+
+  function renderVersionHistory(rows) {
+    var plan = resultPlan();
+    var currentVersion = plan && plan.backend && plan.backend.result ? plan.backend.result.version : null;
+    var wrap = $('resultVersionsList');
+    wrap.innerHTML = '';
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="work-selected-empty">Nessuna versione disponibile</div>';
+      return;
+    }
+    rows.forEach(function (meta) {
+      var b = document.createElement('button');
+      b.className = 'version-row' + (meta.version === currentVersion ? ' current' : '');
+      var left = document.createElement('span');
+      var title = document.createElement('b');
+      title.textContent = 'Versione ' + meta.version + (meta.version === currentVersion ? ' · corrente' : '');
+      var small = document.createElement('small');
+      var when = meta.completedAt || meta.createdAt;
+      var workCount = meta.totals && Number.isFinite(meta.totals.works) ? ' · ' + meta.totals.works + ' lavori' : '';
+      small.textContent = (when ? new Date(when).toLocaleString('it-IT', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : 'Data non disponibile') + workCount;
+      left.appendChild(title); left.appendChild(small);
+      var open = document.createElement('span');
+      open.className = 'version-open';
+      open.textContent = meta.version === currentVersion ? 'APRI' : 'VEDI';
+      b.appendChild(left); b.appendChild(open);
+      b.addEventListener('click', function () { viewResultVersion(meta.version); });
+      wrap.appendChild(b);
+    });
+  }
+
+  async function openResultVersions() {
+    var plan = resultPlan();
+    if (!plan || !plan.backend) return;
+    $('resultVersionsBackdrop').classList.remove('hidden');
+    var rows = localVersionIndex(plan);
+    renderVersionHistory(rows);
+    if (!settings.serverUrl || !settings.apiKey) return;
+    try {
+      var remote = await backendClient().listVersions(plan.backend.planId || plan.id);
+      if (Array.isArray(remote) && remote.length) {
+        plan.backend.versionIndex = remote;
+        saveLibrary();
+        renderVersionHistory(remote);
+      }
+    } catch (_) {}
+  }
+
+  function closeResultVersions() {
+    $('resultVersionsBackdrop').classList.add('hidden');
+  }
+
+  async function viewResultVersion(version) {
+    var plan = resultPlan();
+    if (!plan || !plan.backend) return;
+    var id = plan.id;
+    var currentVersion = plan.backend.result && plan.backend.result.version;
+    closeResultVersions();
+    if (version === currentVersion) {
+      return openResult(id);
+    }
+    var cached = cachedVersionResult(plan, version);
+    if (cached) {
+      return openResult(id, { result: clone(cached), version: version });
+    }
+    if (!settings.serverUrl || !settings.apiKey) return toast('Questa versione è disponibile sul Debian');
+    toast('Carico versione ' + version + '…');
+    try {
+      var data = await backendClient().fetchVersion(plan.backend.planId || plan.id, version);
+      var meta = data.metadata || {};
+      var status = {
+        status: meta.status || 'UNKNOWN',
+        currentVersion: meta.version || version,
+        quality: meta.quality || null,
+        totals: meta.totals || null,
+        lastError: null
+      };
+      var compact = compactResult(status, data.processed, {
+        receivedAt: meta.completedAt || meta.createdAt || new Date().toISOString(),
+        fingerprint: null
+      });
+      var history = Array.isArray(plan.backend.localHistory) ? plan.backend.localHistory : [];
+      history = history.filter(function (row) { return row && row.version !== version; });
+      history.unshift({ version: version, capturedAt: new Date().toISOString(), result: clone(compact) });
+      plan.backend.localHistory = history.slice(0,20);
+      saveLibrary();
+      openResult(id, { result: compact, version: version });
+    } catch (e) {
+      toast('Versione non disponibile: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function showLatestResultVersion() {
+    var plan = resultPlan();
+    if (!plan) return;
+    openResult(plan.id);
   }
 
   function recalcFromResult() {
@@ -3383,16 +3539,17 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   async function downloadResult(kind) {
     var plan = resultPlan();
     if (!plan || !plan.backend) return;
-    if (kind === 'pdf' && plan.backend.reportDirty) {
+    if (kind === 'pdf' && !resultOverrideVersion && plan.backend.reportDirty) {
       toast('PDF da aggiornare: premi RICALCOLA per includere gli ultimi lavori');
       return;
     }
     if (!settings.serverUrl || !settings.apiKey) return toast('Server non collegato');
     toast('Scarico ' + kind.toUpperCase() + '…');
     try {
-      var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, kind);
+      var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, kind, resultOverrideVersion);
       var safeName = String(plan.name || 'rilievo').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'rilievo';
-      var name = (kind === 'pdf' ? safeName : 'GE360-' + safeName) + '.' + kind;
+      var versionSuffix = resultOverrideVersion ? ' - v' + resultOverrideVersion : '';
+      var name = (kind === 'pdf' ? safeName : 'GE360-' + safeName) + versionSuffix + '.' + kind;
       await saveBlob(blob, name);
     } catch (e) {
       if (e && e.name === 'AbortError') return;
@@ -3450,6 +3607,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var plan = currentPlan();
     if (!plan) return;
     $('worksPlanName').textContent = plan.name || 'Rilievo';
+    var currentVersion = plan.backend && plan.backend.result && plan.backend.result.version;
+    $('worksProcessBtn').textContent = currentVersion ? 'RIELABORA → V' + (currentVersion + 1) : 'ELABORA';
     workTarget = { type: 'plan', id: null, name: 'Tutta la casa', roomType: 'altro' };
     $('workSearchInput').value = '';
     $('worksScreen').classList.remove('hidden');
@@ -3592,7 +3751,16 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       var left = document.createElement('span');
       var b = document.createElement('b'); b.textContent = work.label;
       var sm = document.createElement('small');
-      sm.textContent = work.unit ? 'Quantità calcolata dal backend · ' + work.unit : 'Da verificare nel report';
+      var plan = currentPlan();
+      var resolved = plan && plan.backend && plan.backend.result && Array.isArray(plan.backend.result.works)
+        ? plan.backend.result.works.find(function (row) { return row.id === work.id; })
+        : null;
+      if (resolved && Number.isFinite(resolved.quantity)) {
+        sm.className = 'resolved';
+        sm.textContent = '✓ BACKEND · ' + resolved.quantity.toFixed(2).replace('.', ',') + (resolved.unit ? ' ' + resolved.unit : '');
+      } else {
+        sm.textContent = plan && plan.backend && plan.backend.result ? 'Da rielaborare' : (work.unit ? 'Quantità dal backend · ' + work.unit : 'Da verificare nel report');
+      }
       left.appendChild(b); left.appendChild(sm);
       var del = document.createElement('button'); del.textContent = '×';
       del.addEventListener('click', function () { removeWorkItem(work.id); });
@@ -4032,6 +4200,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   $('calcExportBtn').addEventListener('click', function () { closeCalc(); exportJson(); });
   $('closeResultBtn').addEventListener('click', closeResult);
   $('resultRecalcBtn').addEventListener('click', recalcFromResult);
+  $('resultHistoryBtn').addEventListener('click', openResultVersions);
+  $('closeResultVersionsBtn').addEventListener('click', closeResultVersions);
+  $('resultVersionsBackdrop').addEventListener('click', function (e) { if (e.target === $('resultVersionsBackdrop')) closeResultVersions(); });
+  $('resultLatestBtn').addEventListener('click', showLatestResultVersion);
   $('resultStaleBtn').addEventListener('click', recalcFromResult);
   $('resultEditBtn').addEventListener('click', function () { var id = resultPlanId; closeResult(); if (id && id !== activePlanId) openPlan(id); });
   $('resultPdfBtn').addEventListener('click', function () { downloadResult('pdf'); });

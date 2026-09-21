@@ -415,6 +415,11 @@
         </div>
         <button id="closeResultBtn" class="round-btn light" aria-label="Chiudi risultato">✕</button>
       </header>
+      <div class="result-version-bar">
+        <span id="resultVersionBadge">VERSIONE —</span>
+        <button id="resultHistoryBtn">🕘 CRONOLOGIA</button>
+      </div>
+      <div id="resultHistoryNotice" class="result-history-notice hidden">Stai guardando una versione precedente. <button id="resultLatestBtn">TORNA ALL'ULTIMA</button></div>
       <div id="resultStale" class="result-stale hidden">Il rilievo è cambiato dopo questo calcolo. <button id="resultStaleBtn">RICALCOLA</button></div>
       <div class="presentation-canvas-wrap result-canvas-wrap"><canvas id="resultCanvas"></canvas></div>
       <div class="result-legend"><span class="lg measured">misurato</span><span class="lg calculated">calcolato</span><span class="lg sketch">da schizzo</span><span class="lg suspect">da verificare</span></div>
@@ -429,9 +434,20 @@
         <button id="resultPngBtn" class="secondary">PNG</button>
       </div>
       <div class="result-actions">
-        <button id="resultEditBtn" class="secondary">MODIFICA RILIEVO</button>
+        <button id="resultEditBtn" class="secondary">MODIFICA / NUOVA VERSIONE</button>
         <button id="resultRecalcBtn" class="primary">🧮 RICALCOLA</button>
       </div>
+    </section>
+  </div>
+
+  <div id="resultVersionsBackdrop" class="modal-backdrop hidden">
+    <section class="version-history-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">RILIEVO</div><h2>Cronologia versioni</h2></div>
+        <button id="closeResultVersionsBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p class="version-history-help">Ogni rielaborazione crea una nuova versione. Le precedenti restano archiviate e non vengono sovrascritte.</p>
+      <div id="resultVersionsList" class="version-history-list"></div>
     </section>
   </div>
   <div id="toast" class="toast hidden"></div>

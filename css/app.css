@@ -192,3 +192,18 @@
 .work-selected button{width:32px;height:32px;border-radius:50%;background:#fff0f0;color:#b91c1c;font-weight:1000}
 .works-btn span{font-size:24px}
 @media(min-width:760px){.works-body{grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);max-width:1000px;width:100%;margin:0 auto}.works-room-strip{justify-content:center}}
+
+/* Cronologia immutabile delle elaborazioni */
+.result-version-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 6px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
+.result-version-bar span{font-size:10px;font-weight:1000;color:#334155;letter-spacing:.04em}
+.result-version-bar button,.result-history-notice button{border:0;background:#0f172a;color:#fff;border-radius:999px;padding:7px 10px;font-size:9px;font-weight:1000}
+.result-history-notice{margin:7px 0;padding:10px 12px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.result-history-notice.hidden{display:none}
+.version-history-card{width:min(94vw,560px);max-height:82vh;overflow:auto;background:#fff;border-radius:22px;padding:16px;box-shadow:0 25px 70px rgba(15,23,42,.26)}
+.version-history-help{font-size:10px;color:#64748b;font-weight:750;line-height:1.45;margin:2px 0 12px}
+.version-history-list{display:grid;gap:8px}
+.version-row{width:100%;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;text-align:left;background:#f8fafc;border:1px solid #e2e8f0;border-radius:15px;padding:11px 12px}
+.version-row.current{border-color:#2563eb;background:#eff6ff}
+.version-row b{display:block;font-size:12px;color:#0f172a}.version-row small{display:block;margin-top:3px;font-size:9px;color:#64748b;font-weight:750}
+.version-row .version-open{font-size:9px;font-weight:1000;color:#2563eb}
+.work-selected small.resolved{color:#15803d}

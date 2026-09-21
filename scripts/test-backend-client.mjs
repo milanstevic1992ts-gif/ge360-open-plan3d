@@ -77,7 +77,14 @@ const server = fakeServer({
   'GET /jobs/job-1': () => ({ body: { jobId: 'job-1', status: ++polls < 2 ? 'PROCESSING' : 'DONE' } }),
   ['GET /plans/' + payload.planId]: { body: { status: 'PROCESSED', currentVersion: 3, quality: { status: 'OK' }, files: { json: '/x' },
     totals: { floorAreaM2: 5.0125, questions: ['Bagno: Parete w-4: non misurata e non ricavabile dalle altre misure. Serve la misura.'], aiSummary: 'Bagno 2 x 2,5 m' } } },
-  ['GET /plans/' + payload.planId + '/processed']: { body: processed }
+  ['GET /plans/' + payload.planId + '/processed']: { body: processed },
+  ['GET /plans/' + payload.planId + '/versions']: { body: [
+    { version: 3, status: 'PROCESSED', completedAt: '2026-09-21T10:00:00Z', totals: { works: 2 } },
+    { version: 2, status: 'PROCESSED', completedAt: '2026-09-20T10:00:00Z', totals: { works: 1 } }
+  ] },
+  ['GET /plans/' + payload.planId + '/versions/2']: { body: { version: 2, status: 'PROCESSED', completedAt: '2026-09-20T10:00:00Z', totals: { floorAreaM2: 5.0125 } } },
+  ['GET /plans/' + payload.planId + '/versions/2/processed']: { body: processed },
+  ['GET /plans/' + payload.planId + '/versions/2/pdf']: { body: new Blob(['old-pdf'], { type: 'application/pdf' }) }
 });
 const client = createBackendClient({ baseUrl: '10.88.0.1:9888', apiKey: 'k', fetchImpl: server.impl });
 const steps = [];
@@ -87,6 +94,13 @@ assert.equal(out.processed.rooms.length, 1);
 assert.deepEqual(steps.filter((s, i) => steps.indexOf(s) === i), ['SENDING', 'PROCESSING', 'DONE', 'DOWNLOADING']);
 assert.equal(server.calls[0].opts.headers['X-GE360-API-Key'], 'k');
 assert.equal(JSON.parse(server.calls[0].opts.body).walls[2].lengthCm, null);
+const versions = await client.listVersions(payload.planId);
+assert.deepEqual(versions.map(v => v.version), [3, 2]);
+const version2 = await client.fetchVersion(payload.planId, 2);
+assert.equal(version2.metadata.version, 2);
+assert.equal(version2.processed.rooms.length, 1);
+const oldPdf = await client.downloadArtifact(payload.planId, 'pdf', 2);
+assert.equal(oldPdf.type, 'application/pdf');
 
 const bad = createBackendClient({ baseUrl: 'http://10.88.0.1:9888/api/v1', apiKey: 'x', fetchImpl: fakeServer({
   'POST /plans/refine': { status: 422, body: { detail: [{ loc: ['body', 'planId'], msg: 'String should match pattern' }] } }
