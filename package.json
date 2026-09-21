@@ -11,6 +11,7 @@
     "@capacitor/share": "^8.0.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.0.0"
+    "@capacitor/cli": "^8.0.0",
+    "jsdom": "^27.0.0"
   }
 }

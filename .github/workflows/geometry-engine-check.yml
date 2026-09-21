@@ -11,9 +11,14 @@ permissions:
 jobs:
   geometry:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install frontend test dependencies
+        run: npm install --ignore-scripts
 
       - name: Check frontend module syntax
         run: |
@@ -323,6 +328,25 @@ jobs:
           grep -q "plan.notes = clone(notes)" js/app.js
           grep -q "notes: plan.notes || \[\]" js/app.js
           grep -q "settings.serverUrl + '/notes/rewrite'" js/app.js
+
+      - name: Cross frontend/backend jsdom E2E
+        run: |
+          git clone --depth 1 https://github.com/milanstevic1992ts-gif/ge360-rilievi-backend-.git backend-repo
+          python3 -m pip install -q -r backend-repo/requirements-dev.txt
+          export GE360_API_KEY=ge360-cross-contract-key
+          export GE360_REQUIRE_API_KEY=true
+          export GE360_AI_ENABLED=false
+          export GE360_DATA_DIR="$RUNNER_TEMP/ge360-cross-data"
+          export GE360_DB_PATH="$RUNNER_TEMP/ge360-cross-data/ge360.sqlite3"
+          (cd backend-repo && python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 18888 >"$RUNNER_TEMP/ge360-cross-backend.log" 2>&1) &
+          PID=$!
+          cleanup(){ kill "$PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for i in $(seq 1 120); do
+            curl -fsS http://127.0.0.1:18888/healthz >/dev/null 2>&1 && break
+            sleep .1
+          done
+          GE360_E2E_BASE_URL=http://127.0.0.1:18888/api/v1 GE360_E2E_API_KEY="$GE360_API_KEY" node scripts/test-live-backend.mjs
 
       - name: Verify engine stays isolated
         run: |
