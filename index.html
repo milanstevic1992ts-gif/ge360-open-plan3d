@@ -39,6 +39,11 @@
       <canvas id="stage"></canvas>
       <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
       <div id="statusPill" class="status-pill hidden"></div>
+      <div id="roomPlacementBar" class="room-placement-bar hidden">
+        <div><b id="roomPlacementLabel">STANZA 3,00 × 2,00 m</b><small>Trascina e rilascia nel punto desiderato</small></div>
+        <button id="rotateRoomPlacementBtn" aria-label="Ruota stanza di 90 gradi">↻</button>
+        <button id="cancelRoomPlacementBtn">ANNULLA</button>
+      </div>
       <div class="view-controls" aria-label="Controlli vista">
         <button id="zoomOutBtn" aria-label="Zoom indietro">−</button>
         <button id="zoomResetBtn" class="zoom-level" aria-label="Ripristina vista">100%</button>
@@ -68,6 +73,7 @@
       <div class="tools-grid">
         <button id="notesBtn" class="tool-card notes-btn hidden"><span>📝</span><b>APPUNTI</b><small>Lavorazioni e note</small></button>
         <button id="presentBtn" class="tool-card present-btn hidden"><span>👁</span><b>PRESENTA</b><small>Vista pulita</small></button>
+        <button id="roomRectBtn" class="tool-card room-rect-btn"><span>▭</span><b>STANZA A MISURA</b><small>Es. 3 × 2 m e posiziona</small></button>
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
         <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
         <button id="solvePlanBtn" class="tool-card solve-plan-btn hidden"><span>✨</span><b>SISTEMA PIANTA</b><small>Correggi lo schizzo</small></button>
@@ -162,6 +168,35 @@
         <input id="roomCustomName" placeholder="Es. Studio, lavanderia...">
       </label>
       <button id="saveRoomBtn" class="primary block">SALVA AMBIENTE ✓</button>
+    </section>
+  </div>
+
+  <div id="rectRoomBackdrop" class="modal-backdrop hidden">
+    <section class="rect-room-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">STANZA PARAMETRICA</div><h2>Crea stanza a misura</h2></div>
+        <button id="closeRectRoomBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p class="rect-room-help">Inserisci le misure interne della stanza. GE360 crea automaticamente quattro muri già misurati e poi te la fa posizionare sulla pianta.</p>
+      <label class="room-custom-label">Nome ambiente
+        <input id="rectRoomName" placeholder="Es. Bagno, Camera..." value="Ambiente">
+      </label>
+      <div class="rect-room-dimensions">
+        <label>Larghezza
+          <div class="rect-room-input"><input id="rectRoomWidth" inputmode="decimal" value="3,00"><span>m</span></div>
+        </label>
+        <button id="swapRectRoomBtn" class="swap-room-btn" aria-label="Scambia larghezza e profondità">↔</button>
+        <label>Profondità
+          <div class="rect-room-input"><input id="rectRoomHeight" inputmode="decimal" value="2,00"><span>m</span></div>
+        </label>
+      </div>
+      <div class="rect-room-presets">
+        <button data-rect-size="2x2">2 × 2</button>
+        <button data-rect-size="3x2">3 × 2</button>
+        <button data-rect-size="4x3">4 × 3</button>
+        <button data-rect-size="4x4">4 × 4</button>
+      </div>
+      <button id="startRectRoomBtn" class="primary block">▭ POSIZIONA STANZA</button>
     </section>
   </div>
 

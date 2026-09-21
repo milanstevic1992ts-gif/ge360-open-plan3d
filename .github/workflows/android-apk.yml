@@ -37,6 +37,7 @@ jobs:
           node --check js/app.js
           node --check js/backend-bridge.js
           node scripts/test-backend-bridge.mjs
+          node scripts/test-room-template.mjs
 
       - name: Prepare Capacitor Android
         run: |

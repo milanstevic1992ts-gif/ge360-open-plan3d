@@ -2,6 +2,7 @@ import { solveFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
 import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
 import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './backend-bridge.js';
+import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
 
 (function () {
   'use strict';
@@ -48,6 +49,8 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
   var notePickMode = null;
   var pendingNoteTarget = null;
   var currentNoteId = null;
+  var roomPlacementMode = false;
+  var roomDraft = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -172,6 +175,9 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
     notePickMode = null;
     pendingNoteTarget = null;
     currentNoteId = null;
+    roomPlacementMode = false;
+    roomDraft = null;
+    $('roomPlacementBar').classList.add('hidden');
     wallHeightM = Number.isFinite(plan.wallHeightM) && plan.wallHeightM > 0 ? plan.wallHeightM : 2.70;
     surfaceCache = null;
     roomPickMode = false;
@@ -578,6 +584,7 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
     roomPickMode = false;
     $('notesBtn').classList.remove('active');
     $('roomBtn').classList.remove('active');
+    cancelRectRoomPlacement(false);
   }
 
   function noteTargetKey(type, id) {
@@ -1362,6 +1369,198 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
     return (face && face.wallIds ? face.wallIds.slice().sort().join('|') : '');
   }
 
+  function parseRoomMeters(value) {
+    var n = Number(String(value || '').trim().replace(',', '.'));
+    return Number.isFinite(n) && n >= 0.40 && n <= 30 ? n : null;
+  }
+
+  function openRectRoomModal() {
+    closeTools();
+    cancelPickModes();
+    $('rectRoomBackdrop').classList.remove('hidden');
+    setTimeout(function () { $('rectRoomWidth').focus(); }, 60);
+  }
+
+  function closeRectRoomModal() {
+    $('rectRoomBackdrop').classList.add('hidden');
+  }
+
+  function setRectRoomPreset(widthM, heightM) {
+    $('rectRoomWidth').value = Number(widthM).toFixed(2).replace('.', ',');
+    $('rectRoomHeight').value = Number(heightM).toFixed(2).replace('.', ',');
+  }
+
+  function swapRectRoomSides() {
+    var a = $('rectRoomWidth').value;
+    $('rectRoomWidth').value = $('rectRoomHeight').value;
+    $('rectRoomHeight').value = a;
+  }
+
+  function updateRoomPlacementBar() {
+    var bar = $('roomPlacementBar');
+    if (!roomPlacementMode || !roomDraft) {
+      bar.classList.add('hidden');
+      return;
+    }
+    $('roomPlacementLabel').textContent =
+      String(roomDraft.name || 'Ambiente').toUpperCase() + ' · ' +
+      roomDraft.widthM.toFixed(2).replace('.', ',') + ' × ' +
+      roomDraft.heightM.toFixed(2).replace('.', ',') + ' m';
+    bar.classList.remove('hidden');
+  }
+
+  function startRectRoomPlacement() {
+    var widthM = parseRoomMeters($('rectRoomWidth').value);
+    var heightM = parseRoomMeters($('rectRoomHeight').value);
+    if (!widthM || !heightM) return toast('Inserisci misure tra 0,40 e 30 m');
+    var name = ($('rectRoomName').value.trim() || 'Ambiente').slice(0, 40);
+
+    closeRectRoomModal();
+    cancelPickModes();
+    roomPlacementMode = true;
+    roomDraft = {
+      name: name,
+      widthM: widthM,
+      heightM: heightM,
+      center: screenToWorld(viewCenter()),
+      dragging: false
+    };
+    updateRoomPlacementBar();
+    render();
+    toast('Trascina la stanza e rilasciala dove vuoi');
+    vibrate(18);
+  }
+
+  function rotateRectRoomPlacement() {
+    if (!roomDraft) return;
+    var temp = roomDraft.widthM;
+    roomDraft.widthM = roomDraft.heightM;
+    roomDraft.heightM = temp;
+    updateRoomPlacementBar();
+    render();
+    vibrate(12);
+  }
+
+  function cancelRectRoomPlacement(announce) {
+    if (!roomPlacementMode && !roomDraft) return;
+    roomPlacementMode = false;
+    roomDraft = null;
+    activePointerId = null;
+    $('roomPlacementBar').classList.add('hidden');
+    render();
+    if (announce !== false) toast('Posizionamento annullato');
+  }
+
+  function drawRectRoomPreview() {
+    if (!roomPlacementMode || !roomDraft || !roomDraft.center) return;
+    var snapped = snapRectRoomCenter(
+      roomDraft.center,
+      roomDraft.widthM,
+      roomDraft.heightM,
+      walls,
+      30 / viewZoom
+    );
+    var geom = rectRoomGeometry(snapped.center, roomDraft.widthM, roomDraft.heightM);
+    var pts = geom.corners.map(worldToScreen);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(37,99,235,.10)';
+    ctx.strokeStyle = snapped.snapped ? '#16a34a' : '#2563eb';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([9, 7]);
+    ctx.beginPath();
+    pts.forEach(function (p, i) {
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    var c = worldToScreen(snapped.center);
+    var text = roomDraft.widthM.toFixed(2).replace('.', ',') + ' × ' + roomDraft.heightM.toFixed(2).replace('.', ',') + ' m';
+    ctx.font = '1000 13px system-ui';
+    var tw = ctx.measureText(text).width + 20;
+    ctx.fillStyle = 'rgba(255,255,255,.96)';
+    ctx.strokeStyle = '#bfdbfe';
+    ctx.lineWidth = 1.5;
+    roundRect(c.x - tw / 2, c.y - 19, tw, 38, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#1d4ed8';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, c.x, c.y);
+    if (snapped.snapped) {
+      ctx.fillStyle = '#16a34a';
+      ctx.beginPath();
+      var sp = worldToScreen(snapped.target);
+      ctx.arc(sp.x, sp.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function commitRectRoom(center) {
+    if (!roomDraft) return;
+    var draft = clone(roomDraft);
+    var snapped = snapRectRoomCenter(center, draft.widthM, draft.heightM, walls, 30 / viewZoom);
+    var geom = rectRoomGeometry(snapped.center, draft.widthM, draft.heightM);
+
+    checkpoint();
+    var strokeId = uid('room-stroke');
+    var roomId = uid('room');
+    var wallIds = [];
+    var stroke = {
+      id: strokeId,
+      raw: geom.closed.map(function (p) { return { x: p.x, y: p.y }; }),
+      simplified: geom.closed.map(function (p) { return { x: p.x, y: p.y }; }),
+      wallIds: [],
+      source: 'room-template'
+    };
+
+    geom.segments.forEach(function (seg, idx) {
+      var wallId = uid('w');
+      wallIds.push(wallId);
+      stroke.wallIds.push(wallId);
+      walls.push({
+        id: wallId,
+        strokeId: strokeId,
+        a: { x: seg.a.x, y: seg.a.y },
+        b: { x: seg.b.x, y: seg.b.y },
+        lengthCm: seg.lengthCm,
+        source: 'room-template',
+        templateRoomId: roomId,
+        templateSide: idx
+      });
+    });
+    rawStrokes.push(stroke);
+
+    var sortedWallIds = wallIds.slice().sort();
+    rooms.push({
+      id: roomId,
+      name: draft.name,
+      wallIds: sortedWallIds,
+      faceKey: sortedWallIds.join('|'),
+      custom: true,
+      source: 'room-template',
+      widthCm: Math.round(draft.widthM * 100),
+      heightCm: Math.round(draft.heightM * 100)
+    });
+
+    roomPlacementMode = false;
+    roomDraft = null;
+    activePointerId = null;
+    $('roomPlacementBar').classList.add('hidden');
+    surfaceCache = null;
+    refreshSurfaceCache();
+    persistActive();
+    updateUI();
+    render();
+    vibrate(30);
+    toast(draft.name + ' ' + draft.widthM.toFixed(2).replace('.', ',') + ' × ' + draft.heightM.toFixed(2).replace('.', ',') + ' m creata ✓');
+  }
+
   function openRoomPicker() {
     if (!walls.length) return toast('Prima disegna la pianta');
     cancelPickModes();
@@ -2085,7 +2284,6 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
   }
 
   function openTools() {
-    if (!walls.length) return toast('Prima disegna la pianta');
     cancelPickModes();
     $('toolsBackdrop').classList.remove('hidden');
   }
@@ -2120,7 +2318,8 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
     var has = walls.length > 0;
     $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
     $('statusPill').classList.toggle('hidden', !has);
-    $('toolsBtn').classList.toggle('hidden', !has);
+    $('toolsBtn').classList.remove('hidden');
+    $('roomRectBtn').classList.remove('hidden');
     $('clearBtn').classList.toggle('hidden', !has);
     $('solvePlanBtn').classList.toggle('hidden', !has);
     $('roomBtn').classList.toggle('hidden', !has);
@@ -2306,6 +2505,7 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
     openings.forEach(drawOpening);
     drawRoomLabels();
     drawNoteMarkers();
+    drawRectRoomPreview();
     if (currentStroke) drawPolyline(currentStroke, '#2563eb', 7);
   }
 
@@ -2322,6 +2522,14 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
     if (e.isPrimary === false) return;
     e.preventDefault();
     var p = point(e);
+    if (roomPlacementMode && roomDraft) {
+      activePointerId = e.pointerId;
+      roomDraft.dragging = true;
+      roomDraft.center = p;
+      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+      render();
+      return;
+    }
     if (roomPickMode) {
       handleRoomPick(p);
       return;
@@ -2347,6 +2555,12 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
 
   canvas.addEventListener('pointermove', function (e) {
     if (e.isPrimary === false) return;
+    if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
+      e.preventDefault();
+      roomDraft.center = point(e);
+      render();
+      return;
+    }
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
@@ -2357,6 +2571,14 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
 
   canvas.addEventListener('pointerup', function (e) {
     if (e.isPrimary === false) return;
+    if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
+      e.preventDefault();
+      var roomPoint = point(e);
+      roomDraft.center = roomPoint;
+      roomDraft.dragging = false;
+      commitRectRoom(roomPoint);
+      return;
+    }
     if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
     e.preventDefault();
     var p = point(e);
@@ -2366,6 +2588,12 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
 
   canvas.addEventListener('pointercancel', function (e) {
     if (e.pointerId !== activePointerId) return;
+    if (roomPlacementMode && roomDraft) {
+      roomDraft.dragging = false;
+      activePointerId = null;
+      render();
+      return;
+    }
     currentStroke = null;
     activePointerId = null;
     updateUI();
@@ -2391,6 +2619,19 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
   $('toolsBtn').addEventListener('click', openTools);
   $('closeToolsBtn').addEventListener('click', closeTools);
   $('toolsBackdrop').addEventListener('click', function (e) { if (e.target === $('toolsBackdrop')) closeTools(); });
+  $('roomRectBtn').addEventListener('click', openRectRoomModal);
+  $('closeRectRoomBtn').addEventListener('click', closeRectRoomModal);
+  $('rectRoomBackdrop').addEventListener('click', function (e) { if (e.target === $('rectRoomBackdrop')) closeRectRoomModal(); });
+  $('swapRectRoomBtn').addEventListener('click', swapRectRoomSides);
+  $('startRectRoomBtn').addEventListener('click', startRectRoomPlacement);
+  $('rotateRoomPlacementBtn').addEventListener('click', rotateRectRoomPlacement);
+  $('cancelRoomPlacementBtn').addEventListener('click', function () { cancelRectRoomPlacement(true); });
+  document.querySelectorAll('[data-rect-size]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var parts = String(b.dataset.rectSize || '').split('x').map(Number);
+      if (parts.length === 2 && parts.every(Number.isFinite)) setRectRoomPreset(parts[0], parts[1]);
+    });
+  });
   $('clearBtn').addEventListener('click', function () { runTool(clearAll); });
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
