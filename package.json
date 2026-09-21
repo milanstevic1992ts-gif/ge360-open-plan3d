@@ -1,0 +1,14 @@
+{
+  "name": "ge360-rilievo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/barcode-scanner": "3.1.1",
+    "@capacitor/core": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0"
+  }
+}

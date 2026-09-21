@@ -1,6 +1,7 @@
 import { solveFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
 import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
+import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './backend-bridge.js';
 
 (function () {
   'use strict';
@@ -14,7 +15,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   var SETTINGS_KEY = 'ge360-rilievo-settings-v1';
 
   var library = [];
-  var settings = { serverUrl: '', apiKey: '' };
+  var settings = { serverUrl: '', apiKey: '', bridgeConfigured: false, bridgeConnected: false, bridgeAddress: '', bridgeEndpoint: '', bridgePairedAt: null };
   var activePlanId = null;
   var mode = 'draw';
   var rawStrokes = [];
@@ -82,6 +83,7 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
     renderDashboard();
     updateServerBadge();
+    restoreBridgeTunnel();
   }
 
   function currentPlan() {
@@ -1825,9 +1827,64 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
     });
   }
 
+  function nativePlugin(name) {
+    try {
+      return window.Capacitor && window.Capacitor.Plugins ? window.Capacitor.Plugins[name] : null;
+    } catch (_) { return null; }
+  }
+
+  function persistSettings() {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  async function fetchWithTimeout(url, options, timeoutMs) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, timeoutMs || 6000) : null;
+    var opts = Object.assign({}, options || {});
+    if (controller) opts.signal = controller.signal;
+    try {
+      return await fetch(url, opts);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function probeServer(url, key) {
+    var api = normalizeBackendApiUrl(url);
+    if (!api) throw new Error('Indirizzo backend mancante');
+    var hasKey = !!String(key || '').trim();
+    var endpoint = hasKey ? api + '/health' : backendRootFromApi(api) + '/healthz';
+    var headers = hasKey ? { 'X-GE360-API-Key': String(key).trim() } : {};
+    var res = await fetchWithTimeout(endpoint, { headers: headers }, 6000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return { reachable: true, authenticated: hasKey };
+  }
+
+  function renderBridgeSettings() {
+    var badge = $('bridgeStatus');
+    var meta = $('bridgeMeta');
+    var reconnect = $('reconnectBridgeBtn');
+    var disconnect = $('disconnectBridgeBtn');
+    if (!badge || !meta) return;
+
+    badge.className = 'bridge-status ' + (settings.bridgeConnected ? 'connected' : settings.bridgeConfigured ? 'configured' : '');
+    badge.textContent = settings.bridgeConnected ? 'COLLEGATO' : settings.bridgeConfigured ? 'CONFIGURATO' : 'NON COLLEGATO';
+
+    var details = [];
+    if (settings.bridgeAddress) details.push('VPN ' + settings.bridgeAddress);
+    if (settings.bridgeEndpoint) details.push('Endpoint ' + settings.bridgeEndpoint);
+    if (settings.serverUrl) details.push('Backend ' + settings.serverUrl);
+    if (settings.bridgeConfigured && !settings.apiKey) details.push('API key da inserire');
+    meta.textContent = details.join(' · ');
+    meta.classList.toggle('hidden', !details.length);
+    reconnect.classList.toggle('hidden', !settings.bridgeConfigured || settings.bridgeConnected);
+    disconnect.classList.toggle('hidden', !settings.bridgeConnected);
+  }
+
   function openSettings() {
     $('serverUrl').value = settings.serverUrl || '';
     $('apiKey').value = settings.apiKey || '';
+    renderBridgeSettings();
     $('settingsBackdrop').classList.remove('hidden');
   }
 
@@ -1836,31 +1893,152 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   }
 
   function saveSettings() {
-    settings.serverUrl = $('serverUrl').value.trim().replace(/\/$/, '');
+    settings.serverUrl = normalizeBackendApiUrl($('serverUrl').value);
     settings.apiKey = $('apiKey').value.trim();
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    persistSettings();
     updateServerBadge();
+    renderBridgeSettings();
     closeSettings();
     toast('Collegamento salvato ✓');
   }
 
   function updateServerBadge() {
-    var ok = !!(settings.serverUrl && settings.apiKey);
-    $('serverBadge').className = 'server-badge ' + (ok ? 'online' : 'offline');
-    $('serverBadge').textContent = ok ? '● Debian configurato' : '● Debian non collegato';
+    var configured = !!settings.serverUrl;
+    $('serverBadge').className = 'server-badge ' + (settings.bridgeConnected || configured ? 'online' : 'offline');
+    if (settings.bridgeConnected) {
+      $('serverBadge').textContent = '● GE360 Bridge collegato';
+    } else if (configured && settings.apiKey) {
+      $('serverBadge').textContent = '● Debian configurato';
+    } else if (settings.bridgeConfigured) {
+      $('serverBadge').textContent = '● Bridge pronto · da collegare';
+    } else {
+      $('serverBadge').textContent = '● Debian non collegato';
+    }
+  }
+
+  async function scanBackendQr() {
+    var scanner = nativePlugin('CapacitorBarcodeScanner');
+    var tunnel = nativePlugin('GE360Tunnel');
+    if (!scanner || !tunnel) return toast('Scanner QR disponibile nell\'APK Android GE360');
+
+    var button = $('scanQrBtn');
+    var original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'APRO FOTOCAMERA…';
+    try {
+      var result = await scanner.scanBarcode({
+        hint: 0,
+        scanInstructions: 'Inquadra il QR GE360 mostrato dal server',
+        scanButton: false,
+        scanText: 'Scansiona',
+        cameraDirection: 1,
+        scanOrientation: 3,
+        cancelButtonAccessibilityLabel: 'Annulla scansione',
+        android: { scanningLibrary: 'mlkit' }
+      });
+      var profile = parseBridgeQr(result && result.ScanResult);
+      $('bridgeStatus').className = 'bridge-status connecting';
+      $('bridgeStatus').textContent = 'COLLEGAMENTO…';
+
+      var state = await tunnel.connect({ config: profile.wireguardConfig });
+      settings.serverUrl = normalizeBackendApiUrl(profile.backendUrl);
+      if (profile.apiKey) settings.apiKey = profile.apiKey;
+      settings.bridgeConfigured = true;
+      settings.bridgeConnected = !!state.connected;
+      settings.bridgeAddress = profile.bridgeAddress || '';
+      settings.bridgeEndpoint = profile.endpoint || '';
+      settings.bridgePairedAt = new Date().toISOString();
+      persistSettings();
+
+      $('serverUrl').value = settings.serverUrl;
+      $('apiKey').value = settings.apiKey || '';
+      updateServerBadge();
+      renderBridgeSettings();
+
+      try {
+        var probe = await probeServer(settings.serverUrl, settings.apiKey);
+        toast(probe.authenticated ? 'Backend GE360 collegato ✓' : 'Tunnel collegato ✓ · inserisci API Key');
+      } catch (probeError) {
+        toast('Tunnel attivo · backend non ancora raggiungibile');
+      }
+      profile.wireguardConfig = '';
+    } catch (e) {
+      renderBridgeSettings();
+      var message = e && e.message ? e.message : 'scansione annullata';
+      toast('QR non collegato: ' + message);
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  async function restoreBridgeTunnel() {
+    var tunnel = nativePlugin('GE360Tunnel');
+    if (!tunnel) return;
+    try {
+      var state = await tunnel.restore();
+      settings.bridgeConfigured = !!state.configured || !!settings.bridgeConfigured;
+      settings.bridgeConnected = !!state.connected;
+      persistSettings();
+      updateServerBadge();
+      renderBridgeSettings();
+    } catch (_) {
+      settings.bridgeConnected = false;
+      persistSettings();
+      updateServerBadge();
+      renderBridgeSettings();
+    }
+  }
+
+  async function reconnectBridge() {
+    var tunnel = nativePlugin('GE360Tunnel');
+    if (!tunnel) return toast('GE360 Direct Bridge disponibile nell\'APK Android');
+    $('bridgeStatus').className = 'bridge-status connecting';
+    $('bridgeStatus').textContent = 'COLLEGAMENTO…';
+    try {
+      var state = await tunnel.connect({});
+      settings.bridgeConfigured = !!state.configured;
+      settings.bridgeConnected = !!state.connected;
+      persistSettings();
+      updateServerBadge();
+      renderBridgeSettings();
+      if (settings.bridgeConnected) {
+        try {
+          var probe = await probeServer(settings.serverUrl, settings.apiKey);
+          toast(probe.authenticated ? 'Backend GE360 collegato ✓' : 'Tunnel collegato ✓ · inserisci API Key');
+        } catch (_) { toast('Tunnel attivo · backend non raggiungibile'); }
+      }
+    } catch (e) {
+      settings.bridgeConnected = false;
+      persistSettings();
+      updateServerBadge();
+      renderBridgeSettings();
+      toast('Connessione Bridge fallita');
+    }
+  }
+
+  async function disconnectBridge() {
+    var tunnel = nativePlugin('GE360Tunnel');
+    if (!tunnel) return;
+    try { await tunnel.disconnect(); } catch (_) {}
+    settings.bridgeConnected = false;
+    persistSettings();
+    updateServerBadge();
+    renderBridgeSettings();
+    toast('GE360 Bridge disconnesso');
   }
 
   async function testServer() {
-    var url = $('serverUrl').value.trim().replace(/\/$/, '');
+    var url = normalizeBackendApiUrl($('serverUrl').value);
     var key = $('apiKey').value.trim();
-    if (!url || !key) return toast('Inserisci URL e API Key');
+    if (!url) return toast('Inserisci o scansiona il backend');
     toast('Test collegamento…');
     try {
-      var res = await fetch(url + '/health', { headers: { 'X-GE360-API-Key': key } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      toast('Debian raggiungibile ✓');
+      var probe = await probeServer(url, key);
+      $('serverUrl').value = url;
+      toast(probe.authenticated ? 'Backend raggiungibile ✓' : 'Backend raggiungibile ✓ · manca API Key');
     } catch (e) {
-      toast('Connessione fallita: ' + e.message);
+      toast('Connessione fallita: ' + (e.name === 'AbortError' ? 'timeout' : e.message));
     }
   }
 
@@ -2199,6 +2377,9 @@ import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js
   $('closeSettingsBtn').addEventListener('click', closeSettings);
   $('saveSettingsBtn').addEventListener('click', saveSettings);
   $('testServerBtn').addEventListener('click', testServer);
+  $('scanQrBtn').addEventListener('click', scanBackendQr);
+  $('reconnectBridgeBtn').addEventListener('click', reconnectBridge);
+  $('disconnectBridgeBtn').addEventListener('click', disconnectBridge);
   $('backBtn').addEventListener('click', function () { persistActive(); showDashboard(); });
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
   $('doorBtn').addEventListener('click', function () { setMode('door'); });

@@ -93,10 +93,24 @@
 
   <div id="settingsBackdrop" class="modal-backdrop hidden">
     <section class="settings-card">
-      <div class="settings-head"><div><div class="eyebrow dark">DEBIAN</div><h2>Planner professionale</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>
-      <label>Indirizzo server<input id="serverUrl" placeholder="https://tuo-server-ge360/api/v1"></label>
+      <div class="settings-head"><div><div class="eyebrow dark">GE360 DIRECT BRIDGE</div><h2>Collega il backend</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>
+      <div class="bridge-connect">
+        <div class="bridge-connect-head">
+          <div><b>Connessione tramite QR</b><small>WireGuard privato · backend 9888</small></div>
+          <span id="bridgeStatus" class="bridge-status">NON COLLEGATO</span>
+        </div>
+        <p>Dal server GE360 apri la schermata di collegamento, crea il dispositivo e inquadra il QR.</p>
+        <button id="scanQrBtn" class="qr-connect-btn">▣ SCANSIONA QR SERVER</button>
+        <div id="bridgeMeta" class="bridge-meta hidden"></div>
+        <div class="bridge-mini-actions">
+          <button id="reconnectBridgeBtn" class="secondary hidden">RICONNETTI</button>
+          <button id="disconnectBridgeBtn" class="secondary hidden">DISCONNETTI</button>
+        </div>
+      </div>
+      <div class="settings-divider"><span>oppure configurazione manuale</span></div>
+      <label>Indirizzo server<input id="serverUrl" placeholder="http://10.88.0.1:9888/api/v1"></label>
       <label>API Key<input id="apiKey" type="password" placeholder="Incolla la chiave API"></label>
-      <p class="security-note">La chiave resta sul telefono. Non viene salvata nella repo GitHub.</p>
+      <p class="security-note">Il profilo WireGuard resta nella memoria privata Android. La chiave API resta sul telefono e non viene salvata nella repo GitHub.</p>
       <div class="settings-actions"><button id="testServerBtn" class="secondary block">TEST COLLEGAMENTO</button><button id="saveSettingsBtn" class="primary block">SALVA</button></div>
     </section>
   </div>

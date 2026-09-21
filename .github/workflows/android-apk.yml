@@ -1,6 +1,8 @@
 name: GE360 Rilievo APK
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -11,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,13 +29,18 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Check JavaScript
-        run: node --check js/app.js
+      - name: Install web and Capacitor dependencies
+        run: npm install
 
-      - name: Prepare Capacitor
+      - name: Check frontend and QR parser
         run: |
-          npm init -y
-          npm install @capacitor/core@8 @capacitor/cli@8 @capacitor/android@8
+          node --check js/app.js
+          node --check js/backend-bridge.js
+          node scripts/test-backend-bridge.mjs
+
+      - name: Prepare Capacitor Android
+        run: |
+          rm -rf www android
           mkdir -p www
           cp index.html www/
           cp -r css js geometry-engine www/
@@ -49,6 +56,7 @@ jobs:
           EOF
           npx cap add android
           npx cap sync android
+          python3 scripts/prepare-android-native.py
 
       - name: Build debug APK
         working-directory: android
@@ -61,5 +69,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: GE360-Rilievo-APK
-          path: GE360-Rilievo-v1-debug.apk
+          path: GE360-Rilievo-debug.apk
           retention-days: 14
