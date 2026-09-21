@@ -25,6 +25,7 @@ jobs:
           node --check js/backend-results.js
           node --check js/offline-queue.js
           node --check js/photo-store.js
+          node --check js/laser-client.js
           node --check /tmp/ge360-app.mjs
           node --check /tmp/room-surfaces.mjs
           node --check /tmp/sketch-snap.mjs
@@ -289,6 +290,13 @@ jobs:
           grep -q "buildPlanPayload" js/app.js
           grep -q "processPlan" js/app.js
           grep -q '"allowMixedContent": true' .github/workflows/android-apk.yml
+
+      - name: Check native laser integration
+        run: |
+          grep -q "GE360LaserPlugin.class" scripts/prepare-android-native.py
+          grep -q "BLUETOOTH_SCAN" scripts/prepare-android-native.py
+          grep -q "3ab10101-f831-4395-b29d-570977d5bf94" android-native/GE360LaserPlugin.java
+          grep -q "02a6c0d1-0451-4000-b000-fb3210111989" android-native/GE360LaserPlugin.java
 
       - name: Check frontend mobile interaction guards
         run: |

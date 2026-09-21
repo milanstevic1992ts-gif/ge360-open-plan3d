@@ -8,6 +8,7 @@ import { createBackendClient } from './backend-client.js';
 import { compactResult, humanizeText, questionAction, isResultStale, statusInfo, qualityLabel, fmtNum, drawBackendPlan } from './backend-results.js';
 import { createOfflineQueue, isRetryableBackendError } from './offline-queue.js';
 import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetKey } from './photo-store.js';
+import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDevice, restoreLaserDevice, listenLaser } from './laser-client.js';
 
 (function () {
   'use strict';
@@ -67,6 +68,9 @@ import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetK
   var offlineQueue = createOfflineQueue(localStorage);
   var syncBusy = false;
   var photoCaptureTarget = null;
+  var laserDevices = [];
+  var laserListenerReady = false;
+  var laserConnected = false;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -116,6 +120,7 @@ import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetK
     renderDashboard();
     updateServerBadge();
     restoreBridgeTunnel();
+    initLaser();
     setTimeout(function () { flushOfflineQueue(); flushPendingPhotos(); }, 1200);
   }
 
@@ -2328,10 +2333,102 @@ import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetK
     disconnect.classList.toggle('hidden', !settings.bridgeConnected);
   }
 
+
+  function renderLaserState(state) {
+    var badge = $('laserStatus');
+    var disconnect = $('disconnectLaserBtn');
+    if (!badge) return;
+    var configured = !!(state && state.configured);
+    laserConnected = !!(state && state.connected);
+    badge.className = 'bridge-status ' + (laserConnected ? 'connected' : configured ? 'configured' : '');
+    badge.textContent = laserConnected ? 'COLLEGATO' : configured ? 'CONFIGURATO' : 'NON COLLEGATO';
+    disconnect.classList.toggle('hidden', !laserConnected);
+    if (state && state.name) {
+      settings.laserName = state.name;
+      settings.laserVendor = state.vendor || '';
+      settings.laserAddress = state.address || '';
+      persistSettings();
+    }
+  }
+
+  async function initLaser() {
+    if (!laserAvailable() || laserListenerReady) return;
+    laserListenerReady = true;
+    try {
+      await listenLaser(function (reading) {
+        var mm = Number(reading && reading.distanceMm);
+        if (!Number.isFinite(mm) || mm <= 0) return;
+        var text = (mm / 1000).toFixed(3).replace('.', ',') + ' m';
+        $('laserLastMeasurement').textContent = 'Ultima misura: ' + text + (reading.name ? ' · ' + reading.name : '');
+        $('laserLastMeasurement').classList.remove('hidden');
+        var accepts = ['wall','opening-width','opening-offset','opening-height','opening-sill','diagonal'];
+        if (sheetType && accepts.indexOf(sheetType) !== -1 && !$('sheetBackdrop').classList.contains('hidden')) {
+          numberText = metersText(mm / 10);
+          updateSheetValue();
+          vibrate(35);
+          toast('Laser: ' + text + ' inserito ✓');
+        } else {
+          toast('Laser: ' + text + ' · apri una misura per inserirla');
+        }
+      }, renderLaserState, function (e) {
+        if (e && e.message) toast(e.message);
+      });
+      var state = await restoreLaserDevice();
+      if (state) renderLaserState(state);
+    } catch (_) {}
+  }
+
+  async function scanLaser() {
+    if (!laserAvailable()) return toast('Metro laser disponibile nell APK Android GE360');
+    var btn = $('scanLaserBtn');
+    var old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'RICERCA 5 SEC…';
+    try {
+      laserDevices = await scanLaserDevices();
+      var select = $('laserDeviceSelect');
+      select.innerHTML = '';
+      laserDevices.forEach(function (device, idx) {
+        var option = document.createElement('option');
+        option.value = String(idx);
+        option.textContent = (device.vendor === 'leica' ? 'Leica · ' : device.vendor === 'bosch' ? 'Bosch · ' : '') + device.name + ' · ' + device.rssi + ' dBm';
+        select.appendChild(option);
+      });
+      select.classList.toggle('hidden', !laserDevices.length);
+      $('connectLaserBtn').classList.toggle('hidden', !laserDevices.length);
+      toast(laserDevices.length ? laserDevices.length + ' metro laser trovati' : 'Nessun metro laser compatibile trovato');
+    } catch (e) {
+      toast('Laser: ' + (e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  }
+
+  async function connectSelectedLaser() {
+    var idx = Number($('laserDeviceSelect').value);
+    var device = laserDevices[idx];
+    if (!device) return toast('Seleziona un metro laser');
+    try {
+      var state = await connectLaserDevice(device);
+      renderLaserState(Object.assign({}, state, device));
+      toast('Connessione laser avviata');
+    } catch (e) { toast('Laser: ' + (e.message || e)); }
+  }
+
+  async function disconnectLaser() {
+    try {
+      var state = await disconnectLaserDevice();
+      renderLaserState(state || {});
+      toast('Metro laser disconnesso');
+    } catch (_) {}
+  }
+
   function openSettings() {
     $('serverUrl').value = settings.serverUrl || '';
     $('apiKey').value = settings.apiKey || '';
     renderBridgeSettings();
+    renderLaserState({ configured: !!settings.laserAddress, connected: laserConnected, address: settings.laserAddress, name: settings.laserName, vendor: settings.laserVendor });
     $('settingsBackdrop').classList.remove('hidden');
   }
 
@@ -3361,6 +3458,9 @@ import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetK
   $('scanQrBtn').addEventListener('click', scanBackendQr);
   $('reconnectBridgeBtn').addEventListener('click', reconnectBridge);
   $('disconnectBridgeBtn').addEventListener('click', disconnectBridge);
+  $('scanLaserBtn').addEventListener('click', scanLaser);
+  $('connectLaserBtn').addEventListener('click', connectSelectedLaser);
+  $('disconnectLaserBtn').addEventListener('click', disconnectLaser);
   $('backBtn').addEventListener('click', function () { persistActive(); showDashboard(); });
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
   $('doorBtn').addEventListener('click', function () { setMode('door'); });

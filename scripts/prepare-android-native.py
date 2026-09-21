@@ -11,10 +11,12 @@ if not ANDROID.exists():
     raise SystemExit("android/ non esiste: esegui prima npx cap add android")
 
 main_activity = APP / "src/main/java/com/ge360/rilievo/MainActivity.java"
-plugin_src = ROOT / "android-native/GE360TunnelPlugin.java"
-plugin_dst = APP / "src/main/java/com/ge360/rilievo/GE360TunnelPlugin.java"
-plugin_dst.parent.mkdir(parents=True, exist_ok=True)
-plugin_dst.write_text(plugin_src.read_text(encoding="utf-8"), encoding="utf-8")
+java_dir = APP / "src/main/java/com/ge360/rilievo"
+java_dir.mkdir(parents=True, exist_ok=True)
+for plugin_name in ("GE360TunnelPlugin.java", "GE360LaserPlugin.java"):
+    plugin_src = ROOT / "android-native" / plugin_name
+    plugin_dst = java_dir / plugin_name
+    plugin_dst.write_text(plugin_src.read_text(encoding="utf-8"), encoding="utf-8")
 
 main_activity.parent.mkdir(parents=True, exist_ok=True)
 main_activity.write_text(
@@ -26,6 +28,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void load() {
         registerPlugin(GE360TunnelPlugin.class);
+        registerPlugin(GE360LaserPlugin.class);
         super.load();
     }
 }
@@ -60,7 +63,14 @@ m = manifest.read_text(encoding="utf-8")
 if 'android.permission.CAMERA' not in m:
     m = m.replace(
         '<uses-permission android:name="android.permission.INTERNET" />',
-        '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.CAMERA" />',
+        '<uses-permission android:name="android.permission.INTERNET" />\n'
+        '    <uses-permission android:name="android.permission.CAMERA" />\n'
+        '    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />\n'
+        '    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />\n'
+        '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />\n'
+        '    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />\n'
+        '    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n'
+        '    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />',
     )
 if 'android:usesCleartextTraffic=' not in m:
     m = m.replace(
@@ -70,4 +80,4 @@ if 'android:usesCleartextTraffic=' not in m:
     )
 manifest.write_text(m, encoding="utf-8")
 
-print("GE360 native QR/WireGuard integration prepared")
+print("GE360 native QR/WireGuard + laser BLE integration prepared")
