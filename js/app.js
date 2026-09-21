@@ -3939,7 +3939,9 @@ import { createPdfReader } from './pdf-reader.js';
     updatePdfReaderState({ loading: true, rendering: false, error: null, ready: false, page: 1, pages: 0, zoom: 1 });
 
     try {
-      var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, 'pdf', pdfReaderVersion);
+      var currentVersion = plan.backend.result ? Number(plan.backend.result.version) : null;
+      var artifactVersion = currentVersion && currentVersion === pdfReaderVersion ? null : pdfReaderVersion;
+      var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, 'pdf', artifactVersion);
       pdfReaderBlob = blob;
       await ensurePdfReader().open(blob);
     } catch (e) {
