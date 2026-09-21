@@ -1235,8 +1235,13 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
 
   function closeOpeningQuick(cancelNew) {
     $('openingQuickBackdrop').classList.add('hidden');
-    if (cancelNew && openingQuickIsNew && currentOpeningId) {
-      openings = openings.filter(function (o) { return o.id !== currentOpeningId; });
+    if (cancelNew && currentOpeningId) {
+      if (openingQuickIsNew) {
+        openings = openings.filter(function (o) { return o.id !== currentOpeningId; });
+      } else if (openingQuickOriginal) {
+        var existing = openings.find(function (o) { return o.id === currentOpeningId; });
+        if (existing) Object.assign(existing, clone(openingQuickOriginal));
+      }
       surfaceCache = null;
       persistActive();
       render();
