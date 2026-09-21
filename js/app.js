@@ -4190,7 +4190,41 @@ import { createPdfReader } from './pdf-reader.js';
     } catch (_) {}
   }
 
-  function openWorks() {
+  function workTargetFromSelection() {
+    if (!selectedEntity) return null;
+    if (selectedEntity.type === 'wall') {
+      var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
+      if (!wall) return null;
+      var room = roomForWall(wall.id);
+      var idx = walls.findIndex(function (w) { return w.id === wall.id; });
+      var name = 'Muro ' + (idx + 1) + (room ? ' · ' + room.name : '');
+      return {
+        type: 'wall',
+        id: wall.id,
+        name: name,
+        roomType: room ? (room.type || roomTypeFromName(room.name)) : 'altro'
+      };
+    }
+    var selectedRoom = selectedEntity.id ? rooms.find(function (r) { return r.id === selectedEntity.id; }) : null;
+    if (!selectedRoom) return null;
+    return {
+      type: 'room',
+      id: selectedRoom.id,
+      name: selectedRoom.name || 'Ambiente',
+      roomType: selectedRoom.type || roomTypeFromName(selectedRoom.name)
+    };
+  }
+
+  function openWorksForSelection() {
+    var target = workTargetFromSelection();
+    if (!target) {
+      toast('Per aggiungere lavori salva prima la stanza oppure seleziona un muro');
+      return;
+    }
+    openWorks(target);
+  }
+
+  function openWorks(initialTarget) {
     closeTools();
     persistActive();
     var plan = currentPlan();
@@ -4198,7 +4232,7 @@ import { createPdfReader } from './pdf-reader.js';
     $('worksPlanName').textContent = plan.name || 'Rilievo';
     var currentVersion = plan.backend && plan.backend.result && plan.backend.result.version;
     $('worksProcessBtn').textContent = currentVersion ? 'RIELABORA → V' + (currentVersion + 1) : 'ELABORA';
-    workTarget = { type: 'plan', id: null, name: 'Tutta la casa', roomType: 'altro' };
+    workTarget = initialTarget || { type: 'plan', id: null, name: 'Tutta la casa', roomType: 'altro' };
     $('workSearchInput').value = '';
     $('worksScreen').classList.remove('hidden');
     renderWorkRooms();
@@ -4237,6 +4271,16 @@ import { createPdfReader } from './pdf-reader.js';
     }
     chip('TUTTA LA CASA', works.filter(function (w) { return w.targetType === 'plan'; }).length + ' lavori',
       { type:'plan', id:null, name:'Tutta la casa', roomType:'altro' });
+    if (workTarget.type === 'wall') {
+      var selectedWall = walls.find(function (wall) { return wall.id === workTarget.id; });
+      var selectedWallCount = works.filter(function (w) { return w.targetType === 'wall' && w.targetId === workTarget.id; }).length;
+      var selectedWallArea = selectedWall && Number.isFinite(selectedWall.lengthCm)
+        ? (selectedWall.lengthCm / 100) * wallHeightM
+        : null;
+      chip(String(workTarget.name || 'Muro').toUpperCase(),
+        (Number.isFinite(selectedWallArea) ? selectedWallArea.toFixed(2).replace('.', ',') + ' m² · ' : '') + selectedWallCount + ' lavori',
+        workTarget);
+    }
     rooms.forEach(function (room) {
       var count = works.filter(function (w) { return w.targetType === 'room' && w.targetId === room.id; }).length;
       var area = roomAreaForWork(room.id);
@@ -4251,11 +4295,21 @@ import { createPdfReader } from './pdf-reader.js';
     $('worksTargetTitle').textContent = workTargetLabel();
     var query = $('workSearchInput').value || '';
     var usage = loadWorkUsage(localStorage);
+    var suggestionLimit = workTarget.type === 'wall' ? 30 : (query.trim() ? 10 : 8);
     var suggestions = searchWorkCatalog(workCatalog, query, {
       usage: usage,
       roomType: workTarget.roomType || 'altro',
-      limit: query.trim() ? 10 : 8
+      limit: suggestionLimit
     });
+    if (workTarget.type === 'wall') {
+      suggestions = suggestions.filter(function (item) {
+        var rule = String(item.quantityRule || '');
+        return rule.indexOf('WALL_') === 0 ||
+          ['ROOM_NET_WALLS', 'ROOM_GROSS_WALLS', 'ROOM_TILING', 'ROOM_TILING_OR_NET_WALLS'].indexOf(rule) !== -1 ||
+          String(item.id || '').indexOf('wall.') === 0 ||
+          ['drywall.wall', 'drywall.partition'].indexOf(String(item.id || '')) !== -1;
+      }).slice(0, query.trim() ? 10 : 8);
+    }
     var wrap = $('workSuggestions');
     wrap.innerHTML = '';
     suggestions.forEach(function (item) {
@@ -4897,6 +4951,7 @@ import { createPdfReader } from './pdf-reader.js';
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
   $('selectBtn').addEventListener('click', function () { setMode('select'); });
   $('createRoomBtn').addEventListener('click', openRectRoomModal);
+  $('workSelectedBtn').addEventListener('click', openWorksForSelection);
   $('deleteSelectedBtn').addEventListener('click', deleteSelectedEntity);
   $('closeSelectionBtn').addEventListener('click', function () { clearSelection(true); });
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
