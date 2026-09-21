@@ -77,6 +77,8 @@
         <button id="roomBtn" class="tool-card room-btn hidden"><span>🏷</span><b>AMBIENTE</b><small>Nomina la stanza</small></button>
         <button id="surfacesBtn" class="tool-card surfaces-btn hidden"><span>📐</span><b>SUPERFICI</b><small>m² e pareti</small></button>
         <button id="solvePlanBtn" class="tool-card solve-plan-btn hidden"><span>✨</span><b>SISTEMA PIANTA</b><small>Correggi lo schizzo</small></button>
+        <button id="calcBtn" class="tool-card calc-btn hidden"><span>🧮</span><b>CALCOLO PROFESSIONALE</b><small>Pianta esatta e m² dal server</small></button>
+        <button id="quoteBtn" class="tool-card quote-btn hidden"><span>📐</span><b>QUOTA / DIAGONALE</b><small>Misura tra due angoli</small></button>
         <button id="clearBtn" class="tool-card danger-tool hidden"><span>🧹</span><b>PULISCI</b><small>Cancella il disegno</small></button>
       </div>
     </section>
@@ -167,6 +169,10 @@
       <label class="room-custom-label">Nome personalizzato
         <input id="roomCustomName" placeholder="Es. Studio, lavanderia...">
       </label>
+      <div class="room-extra">
+        <label>Altezza stanza<div class="rect-room-input"><input id="roomHeightInput" inputmode="decimal" placeholder="come pianta"><span>m</span></div></label>
+        <label>Rivestimento fino a<div class="rect-room-input"><input id="roomTilingInput" inputmode="decimal" placeholder="bagno 2,20"><span>m</span></div></label>
+      </div>
       <button id="saveRoomBtn" class="primary block">SALVA AMBIENTE ✓</button>
     </section>
   </div>
@@ -212,7 +218,7 @@
         </label>
       </div>
       <div id="surfaceTotals" class="surface-totals"></div>
-      <div class="surface-note">Calcolo <b>indicativo da cantiere</b>: piccoli gap vengono chiusi automaticamente per stimare i m². Pareti lorde: porte e finestre non vengono sottratte. Il soffitto viene considerato uguale al pavimento.</div>
+      <div class="surface-note">Calcolo <b>indicativo da cantiere</b>: piccoli gap vengono chiusi automaticamente per stimare i m². Pareti lorde: porte e finestre non vengono sottratte. Il soffitto viene considerato uguale al pavimento. Per i m² esatti usa <b>CALCOLO PROFESSIONALE</b>.</div>
       <div id="surfaceRooms" class="surface-rooms"></div>
     </section>
   </div>
@@ -283,6 +289,59 @@
     </section>
   </div>
 
+  <div id="calcBackdrop" class="modal-backdrop hidden">
+    <section class="calc-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">CALCOLO PROFESSIONALE</div><h2>Pianta esatta dal server</h2></div>
+        <button id="closeCalcBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p class="calc-help">Lo schizzo è solo una traccia: il server ricostruisce la pianta dalle misure, calcola i muri non misurati quando è possibile e restituisce i m² di ogni stanza.</p>
+      <div class="calc-grid">
+        <label>Altezza pareti<div class="rect-room-input"><input id="calcHeightInput" inputmode="decimal" value="2,70"><span>m</span></div></label>
+        <label>Spessore muri<div class="rect-room-input"><input id="calcThicknessInput" inputmode="decimal" value="12"><span>cm</span></div></label>
+      </div>
+      <label class="room-custom-label">Come hai misurato
+        <select id="calcReferenceSelect" class="calc-select">
+          <option value="interior">Ogni stanza a filo interno</option>
+          <option value="partitionAxis">Lunghezze totali attraverso i tramezzi</option>
+          <option value="axis">Tutto in asse muro</option>
+        </select>
+      </label>
+      <div id="calcInfo" class="calc-info"></div>
+      <div id="calcProgress" class="calc-progress hidden"><div class="spinner"></div><span id="calcProgressText">Invio…</span></div>
+      <button id="calcSendBtn" class="primary block">🧮 CALCOLA</button>
+      <button id="calcExportBtn" class="link-btn">Esporta JSON</button>
+    </section>
+  </div>
+  <div id="resultBackdrop" class="presentation-backdrop hidden">
+    <section class="presentation-sheet result-sheet">
+      <header class="presentation-head">
+        <div>
+          <div class="eyebrow dark">CALCOLO PROFESSIONALE</div>
+          <h2 id="resultTitle">Risultato</h2>
+          <div id="resultStamp" class="presentation-stamp"></div>
+        </div>
+        <button id="closeResultBtn" class="round-btn light" aria-label="Chiudi risultato">✕</button>
+      </header>
+      <div id="resultStale" class="result-stale hidden">Il rilievo è cambiato dopo questo calcolo. <button id="resultStaleBtn">RICALCOLA</button></div>
+      <div class="presentation-canvas-wrap result-canvas-wrap"><canvas id="resultCanvas"></canvas></div>
+      <div class="result-legend"><span class="lg measured">misurato</span><span class="lg calculated">calcolato</span><span class="lg sketch">da schizzo</span><span class="lg suspect">da verificare</span></div>
+      <div id="resultAi" class="result-ai hidden"></div>
+      <div id="resultQuestions" class="result-questions"></div>
+      <div id="resultTotals" class="presentation-summary"></div>
+      <div id="resultRooms" class="result-rooms"></div>
+      <div id="resultWalls" class="result-walls"></div>
+      <div class="result-downloads">
+        <button id="resultPdfBtn" class="secondary">PDF</button>
+        <button id="resultDxfBtn" class="secondary">DXF</button>
+        <button id="resultPngBtn" class="secondary">PNG</button>
+      </div>
+      <div class="result-actions">
+        <button id="resultEditBtn" class="secondary">MODIFICA RILIEVO</button>
+        <button id="resultRecalcBtn" class="primary">🧮 RICALCOLA</button>
+      </div>
+    </section>
+  </div>
   <div id="toast" class="toast hidden"></div>
   <script type="module" src="js/app.js"></script>
 </body>

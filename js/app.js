@@ -3,6 +3,9 @@ import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from '.
 import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
 import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './backend-bridge.js';
 import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
+import { buildPlanPayload, payloadFingerprint, measuredWallCount, roomTypeFromName, DEFAULT_WALL_THICKNESS_CM } from './plan-payload.js';
+import { createBackendClient } from './backend-client.js';
+import { compactResult, humanizeText, questionAction, isResultStale, statusInfo, qualityLabel, fmtNum, drawBackendPlan } from './backend-results.js';
 
 (function () {
   'use strict';
@@ -51,12 +54,32 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   var currentNoteId = null;
   var roomPlacementMode = false;
   var roomDraft = null;
+  var diagonals = [];
+  var quoteFirst = null;
+  var currentDiagonalId = null;
+  var wallThicknessCm = DEFAULT_WALL_THICKNESS_CM;
+  var wallReference = 'interior';
+  var calcBusy = false;
+  var resultPlanId = null;
+  var resultHighlightWallId = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
   }
 
   function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+  // cm -> "3,45" oppure "3,457" se c'è il millimetro
+  function metersText(cm) {
+    if (!Number.isFinite(cm)) return '';
+    var mm = Math.round(cm * 10);
+    return (mm % 10 === 0 ? (cm / 100).toFixed(2) : (cm / 100).toFixed(3)).replace('.', ',');
+  }
+
+  // metri digitati -> cm con precisione al millimetro
+  function metersToCm(meters) {
+    return Math.round(meters * 1000) / 10;
+  }
 
   function vibrate(ms) {
     try { if (navigator.vibrate) navigator.vibrate(ms || 12); } catch (_) {}
@@ -119,6 +142,9 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     plan.rooms = clone(rooms);
     plan.notes = clone(notes);
     plan.wallHeightM = wallHeightM;
+    plan.diagonals = clone(diagonals);
+    plan.wallThicknessCm = wallThicknessCm;
+    plan.wallReference = wallReference;
     plan.view = { zoom: viewZoom, rotation: viewRotation };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
     plan.summary = summary();
@@ -156,6 +182,9 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
       rooms: [],
       notes: [],
       wallHeightM: 2.70,
+      diagonals: [],
+      wallThicknessCm: DEFAULT_WALL_THICKNESS_CM,
+      wallReference: 'interior',
       view: { zoom: 1, rotation: 0 }
     };
     library.unshift(plan);
@@ -172,6 +201,11 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     openings = clone(plan.openings || []);
     rooms = clone(plan.rooms || []);
     notes = clone(plan.notes || []);
+    diagonals = clone(plan.diagonals || []);
+    quoteFirst = null;
+    currentDiagonalId = null;
+    wallThicknessCm = Number.isFinite(plan.wallThicknessCm) && plan.wallThicknessCm > 0 ? plan.wallThicknessCm : DEFAULT_WALL_THICKNESS_CM;
+    wallReference = plan.wallReference || 'interior';
     notePickMode = null;
     pendingNoteTarget = null;
     currentNoteId = null;
@@ -241,7 +275,16 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
       var actions = document.createElement('div');
       actions.className = 'plan-actions';
       actions.appendChild(makeButton('APRI', 'open-plan', function () { openPlan(plan.id); }));
-      actions.appendChild(makeButton('DEBIAN', 'send-plan', function () { sendPlan(plan.id); }));
+      actions.appendChild(makeButton(calcBusy ? '…' : 'CALCOLA', 'send-plan', function () { sendPlan(plan.id); }));
+      if (plan.backend && plan.backend.result) {
+        actions.appendChild(makeButton('RISULTATO', 'send-plan result-plan', function () { openResult(plan.id); }));
+        var bInfo = statusInfo(plan.backend.result.status);
+        var badge = document.createElement('span');
+        badge.className = 'backend-badge ' + bInfo.cls;
+        badge.textContent = bInfo.label + (Number.isFinite(plan.backend.result.totals && plan.backend.result.totals.floorAreaM2) ? ' · ' + fmtNum(plan.backend.result.totals.floorAreaM2, 2, 'm²') : '');
+        meta.appendChild(document.createElement('br'));
+        meta.appendChild(badge);
+      }
       actions.appendChild(makeButton('🗑', 'delete-plan', function () { deletePlan(plan.id); }));
 
       info.appendChild(h3);
@@ -292,7 +335,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   }
 
   function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, wallHeightM: wallHeightM }));
+    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, diagonals: diagonals, wallHeightM: wallHeightM }));
     if (history.length > 30) history.shift();
   }
 
@@ -304,6 +347,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     openings = data.openings || [];
     rooms = data.rooms || [];
     notes = data.notes || [];
+    diagonals = data.diagonals || [];
     wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
     surfaceCache = null;
     closeSheet();
@@ -537,9 +581,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   function editWallMeasurement(wall) {
     if (!wall) return;
     selectedWallId = wall.id;
-    numberText = Number.isFinite(wall.lengthCm) && wall.lengthCm > 0
-      ? (wall.lengthCm / 100).toFixed(2).replace('.', ',')
-      : '';
+    numberText = Number.isFinite(wall.lengthCm) && wall.lengthCm > 0 ? metersText(wall.lengthCm) : '';
     openSheet('wall');
     render();
     vibrate(14);
@@ -548,13 +590,14 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   function editOpening(opening) {
     if (!opening) return;
     currentOpeningId = opening.id;
-    numberText = Number.isFinite(opening.widthCm) ? (opening.widthCm / 100).toFixed(2).replace('.', ',') : '';
+    numberText = Number.isFinite(opening.widthCm) ? metersText(opening.widthCm) : '';
     openSheet('opening-width');
     render();
     vibrate(14);
   }
 
   function deleteCurrentOpening() {
+    if (sheetType === 'diagonal') return deleteCurrentDiagonal();
     var opening = openings.find(function (o) { return o.id === currentOpeningId; });
     if (!opening) return;
     var label = opening.type === 'door' ? 'porta' : 'finestra';
@@ -904,9 +947,10 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   function setMode(next, announce) {
     cancelPickModes();
     mode = next;
-    [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure']].forEach(function (pair) {
+    [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure'], ['quoteBtn', 'quote']].forEach(function (pair) {
       $(pair[0]).classList.toggle('active', pair[1] === mode);
     });
+    quoteFirst = null;
     if (announce !== false) {
       var msg = next === 'draw'
         ? 'Disegna col dito'
@@ -914,7 +958,9 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
           ? 'Tocca un muro o una porta esistente'
           : next === 'window'
             ? 'Tocca un muro o una finestra esistente'
-            : 'Tocca il muro da modificare';
+            : next === 'quote'
+              ? 'Tocca il primo angolo (o una quota esistente)'
+              : 'Tocca il muro da modificare';
       toast(msg);
     }
   }
@@ -974,7 +1020,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     if (!target) target = walls.find(function (w) { return !w.lengthCm; });
     if (!target) { selectedWallId = null; closeSheet(); return toast('Misure complete ✓'); }
     selectedWallId = target.id;
-    numberText = target.lengthCm ? (target.lengthCm / 100).toFixed(2).replace('.', ',') : '';
+    numberText = target.lengthCm ? metersText(target.lengthCm) : '';
     openSheet('wall');
     render();
   }
@@ -982,14 +1028,24 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   function openSheet(type) {
     sheetType = type;
     $('sheetBackdrop').classList.remove('hidden');
-    $('deleteOpeningBtn').classList.toggle('hidden', type === 'wall');
-    if (type === 'wall') {
+    $('deleteOpeningBtn').classList.toggle('hidden', type === 'wall' || (type === 'diagonal' && !currentDiagonalId));
+    $('deleteOpeningBtn').textContent = type === 'diagonal' ? '🗑 ELIMINA QUOTA' : '🗑 ELIMINA APERTURA';
+    if (type === 'diagonal') {
+      $('sheetKicker').textContent = 'QUOTA TRA I DUE PUNTI';
+      $('cornerToggleBtn').classList.add('hidden');
+    } else if (type === 'wall') {
       var idx = walls.findIndex(function (w) { return w.id === selectedWallId; });
       $('sheetKicker').textContent = 'MISURA MURO ' + (idx + 1) + ' DI ' + walls.length;
     } else {
       var o = openings.find(function (x) { return x.id === currentOpeningId; });
       if (type === 'opening-width') {
         $('sheetKicker').textContent = o && o.type === 'door' ? 'LARGHEZZA PORTA' : 'LARGHEZZA FINESTRA';
+        $('cornerToggleBtn').classList.add('hidden');
+      } else if (type === 'opening-height') {
+        $('sheetKicker').textContent = o && o.type === 'door' ? 'ALTEZZA PORTA' : 'ALTEZZA FINESTRA';
+        $('cornerToggleBtn').classList.add('hidden');
+      } else if (type === 'opening-sill') {
+        $('sheetKicker').textContent = 'ALTEZZA DAVANZALE DAL PAVIMENTO';
         $('cornerToggleBtn').classList.add('hidden');
       } else if (type === 'opening-offset') {
         var side = openingReferenceLabel(o);
@@ -1020,19 +1076,20 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     if (key === '⌫') numberText = numberText.slice(0, -1);
     else if (key === ',') {
       if (numberText.indexOf(',') === -1) numberText += numberText ? ',' : '0,';
-    } else if (numberText.length < 6) numberText += key;
+    } else if (numberText.length < 7) numberText += key;
     updateSheetValue();
   }
 
   function confirmSheet() {
     var meters = Number(numberText.replace(',', '.'));
-    if (!numberText.trim() || !Number.isFinite(meters) || (sheetType === 'opening-offset' ? meters < 0 : meters <= 0)) return toast('Inserisci una misura');
+    var zeroOk = sheetType === 'opening-offset' || sheetType === 'opening-sill';
+    if (!numberText.trim() || !Number.isFinite(meters) || (zeroOk ? meters < 0 : meters <= 0)) return toast('Inserisci una misura');
 
     if (sheetType === 'wall') {
       checkpoint();
       var wall = walls.find(function (w) { return w.id === selectedWallId; });
       if (wall) {
-        wall.lengthCm = Math.round(meters * 100);
+        wall.lengthCm = metersToCm(meters);
         openings.filter(function (o) { return o.wallId === wall.id; }).forEach(function (o) {
           recalcOpeningPosition(o);
         });
@@ -1055,10 +1112,10 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     } else if (sheetType === 'opening-width') {
       checkpoint();
       var op = openings.find(function (o) { return o.id === currentOpeningId; });
-      if (op) op.widthCm = Math.round(meters * 100);
+      if (op) op.widthCm = metersToCm(meters);
       surfaceCache = null;
       persistActive();
-      numberText = op && Number.isFinite(op.offsetCm) ? (op.offsetCm / 100).toFixed(2).replace('.', ',') : '';
+      numberText = op && Number.isFinite(op.offsetCm) ? metersText(op.offsetCm) : '';
       openSheet('opening-offset');
       render();
       toast('Ora misura dall’angolo al bordo');
@@ -1068,7 +1125,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
       var op2 = openings.find(function (o) { return o.id === currentOpeningId; });
       if (op2) {
         var ow = walls.find(function (w) { return w.id === op2.wallId; });
-        var offsetCm = Math.round(meters * 100);
+        var offsetCm = metersToCm(meters);
         if (ow && ow.lengthCm && offsetCm + op2.widthCm > ow.lengthCm) {
           toast('Non entra nel muro: riduci la distanza');
           vibrate(80);
@@ -1078,15 +1135,50 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
         recalcOpeningPosition(op2);
         surfaceCache = null;
       }
+      persistActive();
+      if (op2) {
+        numberText = metersText(Number.isFinite(op2.heightCm) ? op2.heightCm : (op2.type === 'door' ? 210 : 120));
+        openSheet('opening-height');
+        render();
+        return;
+      }
+      currentOpeningId = null;
+      closeSheet();
+    } else if (sheetType === 'opening-height') {
+      checkpoint();
+      var op3 = openings.find(function (o) { return o.id === currentOpeningId; });
+      if (op3) op3.heightCm = metersToCm(meters);
+      persistActive();
+      if (op3 && op3.type === 'window') {
+        numberText = metersText(Number.isFinite(op3.sillHeightCm) ? op3.sillHeightCm : 90);
+        openSheet('opening-sill');
+        return;
+      }
+      currentOpeningId = null;
+      closeSheet();
+    } else if (sheetType === 'opening-sill') {
+      checkpoint();
+      var op4 = openings.find(function (o) { return o.id === currentOpeningId; });
+      if (op4) op4.sillHeightCm = metersToCm(meters);
       currentOpeningId = null;
       persistActive();
       closeSheet();
+    } else if (sheetType === 'diagonal') {
+      saveDiagonalLength(metersToCm(meters));
+      return;
     }
     updateUI();
     render();
   }
 
   function later() {
+    if (sheetType === 'diagonal') {
+      pendingQuote = null;
+      currentDiagonalId = null;
+      closeSheet();
+      render();
+      return;
+    }
     if (sheetType === 'wall') {
       selectedWallId = null;
       closeSheet();
@@ -1097,21 +1189,8 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   }
 
   function planPayload(plan) {
-    return {
-      version: 4,
-      kind: 'ge360-rough-survey',
-      planId: plan.id,
-      name: plan.name || 'Rilievo',
-      updatedAt: plan.updatedAt || new Date().toISOString(),
-      rawStrokes: plan.rawStrokes || [],
-      walls: plan.walls || [],
-      openings: plan.openings || [],
-      rooms: plan.rooms || [],
-      notes: plan.notes || [],
-      wallHeightM: Number.isFinite(plan.wallHeightM) ? plan.wallHeightM : 2.70,
-      surfaces: plan.surfaceSummary || null,
-      summary: summary(plan)
-    };
+    // il contratto v4 resta invariato; notes: plan.notes || [] e i campi v2 li aggiunge plan-payload.js
+    return buildPlanPayload(Object.assign({}, plan, { notes: plan.notes || [] }), { summary: summary(plan) });
   }
 
   function solverInput() {
@@ -1128,7 +1207,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     if (!walls.length) return toast('Prima disegna la planimetria');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
-      toast('Mancano ' + missing.length + ' misure dei muri');
+      toast('Mancano ' + missing.length + ' misure: completa o usa CALCOLO PROFESSIONALE');
       return openNextMissing(missing[0].id);
     }
     var incompleteOpenings = openings.filter(function (o) {
@@ -1585,6 +1664,8 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     pendingRoomId = existing ? existing.id : null;
     selectedRoomName = existing ? existing.name : '';
     $('roomCustomName').value = existing && existing.custom ? existing.name : '';
+    $('roomHeightInput').value = existing && existing.heightCm ? metersText(existing.heightCm) : '';
+    $('roomTilingInput').value = existing && existing.tilingHeightCm ? metersText(existing.tilingHeightCm) : '';
     document.querySelectorAll('[data-room-name]').forEach(function (b) {
       b.classList.toggle('selected', existing && existing.name === b.dataset.roomName);
     });
@@ -1597,7 +1678,14 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     pendingRoomId = null;
     selectedRoomName = '';
     $('roomCustomName').value = '';
+    $('roomHeightInput').value = '';
+    $('roomTilingInput').value = '';
     document.querySelectorAll('[data-room-name]').forEach(function (b) { b.classList.remove('selected'); });
+  }
+
+  function parseMetersInput(value) {
+    var n = Number(String(value || '').trim().replace(',', '.'));
+    return Number.isFinite(n) && n > 0 ? n : null;
   }
 
   function selectRoomPreset(name, button) {
@@ -1629,6 +1717,11 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
       room.faceKey = key;
       room.custom = !!custom;
     }
+    room.type = roomTypeFromName(name);
+    var roomH = parseMetersInput($('roomHeightInput').value);
+    var roomT = parseMetersInput($('roomTilingInput').value);
+    if (roomH) room.heightCm = metersToCm(roomH); else delete room.heightCm;
+    if (roomT) room.tilingHeightCm = metersToCm(roomT); else delete room.tilingHeightCm;
     notes.forEach(function (note) {
       if (['room', 'floor', 'ceiling'].indexOf(note.targetType) !== -1) {
         if (note.targetId !== key && note.targetId !== room.id) return;
@@ -2241,39 +2334,467 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     }
   }
 
-  async function sendPlan(id) {
-    var plan = library.find(function (p) { return p.id === id; });
-    if (!plan) return;
-    if (!settings.serverUrl || !settings.apiKey) {
-      openSettings();
-      return toast('Configura prima il Debian');
-    }
-    toast('Invio al planner…');
-    try {
-      var res = await fetch(settings.serverUrl + '/plans/refine', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-GE360-API-Key': settings.apiKey },
-        body: JSON.stringify(planPayload(plan))
+  // ---------------------------------------------------------------------------
+  // QUOTE PUNTO-PUNTO (diagonali, posizione dei tramezzi)
+  // Gli estremi sono agganciati agli angoli dei muri ({wallId, end}): se la pianta
+  // viene sistemata la quota segue i muri.
+  // ---------------------------------------------------------------------------
+  var pendingQuote = null;
+
+  function anchorPoint(anchor) {
+    if (!anchor) return null;
+    var wall = anchor.wallId ? walls.find(function (w) { return w.id === anchor.wallId; }) : null;
+    var p = wall ? wall[anchor.end === 'b' ? 'b' : 'a'] : null;
+    if (p) return { x: p.x, y: p.y };
+    return Number.isFinite(anchor.x) && Number.isFinite(anchor.y) ? { x: anchor.x, y: anchor.y } : null;
+  }
+
+  function nearestCorner(p) {
+    var best = null;
+    var limit = 46 / viewZoom;
+    walls.forEach(function (wall) {
+      ['a', 'b'].forEach(function (end) {
+        var q = wall[end];
+        var d = dist(p, q);
+        if (d <= limit && (!best || d < best.d)) best = { wallId: wall.id, end: end, x: q.x, y: q.y, d: d };
       });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      plan.backend = { sentAt: new Date().toISOString(), status: 'sent' };
-      saveLibrary();
-      renderDashboard();
-      toast('Inviato al Debian ✓');
-    } catch (e) {
-      toast('Errore: ' + e.message);
+    });
+    return best;
+  }
+
+  function nearestDiagonal(p) {
+    var best = null;
+    diagonals.forEach(function (d) {
+      var a = anchorPoint(d.a), b = anchorPoint(d.b);
+      if (!a || !b) return;
+      var dd = dist(p, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      if (dd <= 34 / viewZoom && (!best || dd < best.d)) best = { diagonal: d, d: dd };
+    });
+    return best;
+  }
+
+  function handleQuotePick(p) {
+    if (!quoteFirst) {
+      var existing = nearestDiagonal(p);
+      if (existing) {
+        currentDiagonalId = existing.diagonal.id;
+        numberText = metersText(existing.diagonal.lengthCm);
+        openSheet('diagonal');
+        render();
+        return;
+      }
+    }
+    var corner = nearestCorner(p);
+    if (!corner) return toast('Tocca un angolo (estremo di un muro)');
+    if (!quoteFirst) {
+      quoteFirst = { wallId: corner.wallId, end: corner.end, x: corner.x, y: corner.y };
+      vibrate(12);
+      toast('Ora tocca il secondo angolo');
+      render();
+      return;
+    }
+    if (dist(quoteFirst, corner) < 1e-6) return toast('Scegli un angolo diverso');
+    pendingQuote = { a: quoteFirst, b: { wallId: corner.wallId, end: corner.end, x: corner.x, y: corner.y } };
+    quoteFirst = null;
+    currentDiagonalId = null;
+    numberText = '';
+    openSheet('diagonal');
+    render();
+  }
+
+  function saveDiagonalLength(cm) {
+    checkpoint();
+    if (currentDiagonalId) {
+      var d = diagonals.find(function (x) { return x.id === currentDiagonalId; });
+      if (d) d.lengthCm = cm;
+    } else if (pendingQuote) {
+      diagonals.push({ id: uid('q'), a: pendingQuote.a, b: pendingQuote.b, lengthCm: cm });
+    }
+    pendingQuote = null;
+    currentDiagonalId = null;
+    persistActive();
+    closeSheet();
+    render();
+    toast('Quota salvata ✓');
+  }
+
+  function deleteCurrentDiagonal() {
+    if (!currentDiagonalId) return;
+    if (!confirm('Eliminare questa quota?')) return;
+    checkpoint();
+    diagonals = diagonals.filter(function (d) { return d.id !== currentDiagonalId; });
+    currentDiagonalId = null;
+    persistActive();
+    closeSheet();
+    render();
+    toast('Quota eliminata');
+  }
+
+  function drawDiagonals() {
+    diagonals.forEach(function (d) {
+      var a = anchorPoint(d.a), b = anchorPoint(d.b);
+      if (!a || !b) return;
+      var sa = worldToScreen(a), sb = worldToScreen(b);
+      ctx.save();
+      ctx.strokeStyle = d.id === currentDiagonalId ? '#2563eb' : '#7c3aed';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([9, 6]);
+      ctx.beginPath();
+      ctx.moveTo(sa.x, sa.y);
+      ctx.lineTo(sb.x, sb.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      var text = metersText(d.lengthCm) + ' m';
+      ctx.font = '900 12px system-ui';
+      var w = Math.max(40, ctx.measureText(text).width + 14);
+      var mx = (sa.x + sb.x) / 2, my = (sa.y + sb.y) / 2;
+      ctx.fillStyle = '#faf5ff';
+      roundRect(mx - w / 2, my - 14, w, 28, 10);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#6b21a8';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, mx, my + 1);
+      ctx.restore();
+    });
+    if (quoteFirst) {
+      var q = worldToScreen(quoteFirst);
+      ctx.save();
+      ctx.fillStyle = '#7c3aed';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // CALCOLO PROFESSIONALE: invio → attesa del job → risultato
+  // ---------------------------------------------------------------------------
+  var PROGRESS_TEXT = {
+    SENDING: 'Invio del rilievo…',
+    QUEUED: 'In coda sul server…',
+    PROCESSING: 'Ricostruzione della pianta…',
+    DOWNLOADING: 'Scarico il risultato…'
+  };
+
+  function backendClient() {
+    return createBackendClient({ baseUrl: settings.serverUrl, apiKey: settings.apiKey });
+  }
+
+  function openCalc() {
+    cancelPickModes();
+    if (!walls.length) return toast('Prima disegna la planimetria');
+    persistActive();
+    var plan = currentPlan();
+    var payload = planPayload(plan);
+    var total = payload.walls.length;
+    var measured = measuredWallCount(payload);
+    $('calcHeightInput').value = metersText(Math.round(wallHeightM * 1000) / 10);
+    $('calcThicknessInput').value = String(wallThicknessCm).replace('.', ',');
+    $('calcReferenceSelect').value = wallReference;
+    var info = $('calcInfo');
+    info.className = 'calc-info';
+    if (!settings.serverUrl || !settings.apiKey) {
+      info.classList.add('warn');
+      info.textContent = 'Server non collegato: apri ⚙ nella schermata iniziale e scansiona il QR.';
+    } else if (!measured) {
+      info.classList.add('warn');
+      info.textContent = 'Serve almeno un muro misurato.';
+    } else if (measured < total) {
+      info.textContent = (total - measured) + ' muri su ' + total + ' senza misura: il server li calcola dalle altre misure quando è possibile e ti dice quali mancano davvero.';
+    } else {
+      info.textContent = 'Tutte le ' + total + ' misure inserite' + (diagonals.length ? ' · ' + diagonals.length + ' quote di controllo' : '') + '.';
+    }
+    setCalcProgress(null);
+    $('calcSendBtn').disabled = !measured || !settings.serverUrl || !settings.apiKey;
+    $('calcBackdrop').classList.remove('hidden');
+  }
+
+  function closeCalc() {
+    $('calcBackdrop').classList.add('hidden');
+  }
+
+  function setCalcProgress(text) {
+    $('calcProgress').classList.toggle('hidden', !text);
+    $('calcProgressText').textContent = text || '';
+    if (text) $('calcSendBtn').disabled = true;
+  }
+
+  function submitCalc() {
+    var h = parseMetersInput($('calcHeightInput').value);
+    var t = Number(String($('calcThicknessInput').value || '').replace(',', '.'));
+    if (!h || h < 1.5 || h > 10) return toast('Altezza pareti non valida');
+    if (!Number.isFinite(t) || t < 3 || t > 100) return toast('Spessore muri non valido (cm)');
+    wallHeightM = h;
+    wallThicknessCm = t;
+    wallReference = $('calcReferenceSelect').value || 'interior';
+    surfaceCache = null;
+    persistActive();
+    runCalculation(activePlanId, true);
+  }
+
+  function sendPlan(id) {
+    if (!settings.serverUrl || !settings.apiKey) {
+      openSettings();
+      return toast('Collega prima il server GE360');
+    }
+    runCalculation(id, false);
+  }
+
+  async function runCalculation(id, fromModal) {
+    if (calcBusy) return toast('Calcolo già in corso…');
+    var plan = library.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    if (id === activePlanId) persistActive();
+    var payload = planPayload(plan);
+    if (!payload.planId) return toast('Identificativo rilievo non valido');
+    if (!measuredWallCount(payload)) return toast('Serve almeno un muro misurato');
+    calcBusy = true;
+    var progress = function (status) {
+      var text = PROGRESS_TEXT[status] || 'Elaborazione…';
+      if (fromModal) setCalcProgress(text); else toast(text);
+    };
+    try {
+      var out = await backendClient().processPlan(payload, { onProgress: progress });
+      var compact = compactResult(out.status, out.processed, { fingerprint: payloadFingerprint(payload) });
+      plan.backend = {
+        planId: out.submission.planId,
+        sentAt: new Date().toISOString(),
+        status: compact.status,
+        result: compact,
+        lastError: null
+      };
+      saveLibrary();
+      if (fromModal) closeCalc();
+      openResult(id);
+    } catch (e) {
+      var message = e && e.message ? e.message : String(e);
+      plan.backend = Object.assign({}, plan.backend || {}, { lastError: message, lastErrorAt: new Date().toISOString() });
+      saveLibrary();
+      toast('Calcolo non riuscito: ' + message);
+      vibrate(80);
+      if (e && e.status === 401) { closeCalc(); openSettings(); }
+    } finally {
+      calcBusy = false;
+      if (fromModal) { setCalcProgress(null); $('calcSendBtn').disabled = false; }
+      if (!$('dashboard').classList.contains('hidden')) renderDashboard();
+    }
+  }
+
+  function resultPlan() {
+    return resultPlanId ? library.find(function (p) { return p.id === resultPlanId; }) : null;
+  }
+
+  function resultCard(label, value, unit, digits) {
+    var div = document.createElement('div');
+    div.className = 'ps-card';
+    var k = document.createElement('div');
+    k.className = 'ps-k';
+    k.textContent = label;
+    var v = document.createElement('div');
+    v.className = 'ps-v';
+    v.textContent = fmtNum(value, digits == null ? 2 : digits, unit);
+    div.appendChild(k);
+    div.appendChild(v);
+    return div;
+  }
+
+  function cell(label, value, unit, digits) {
+    var div = document.createElement('div');
+    div.textContent = label;
+    var b = document.createElement('b');
+    b.textContent = fmtNum(value, digits == null ? 2 : digits, unit);
+    div.appendChild(b);
+    return div;
+  }
+
+  function onQuestion(question) {
+    var plan = resultPlan();
+    if (!plan) return;
+    var action = questionAction(question, plan.walls || []);
+    if (action.type === 'info') return;
+    var id = plan.id;
+    closeResult();
+    if (activePlanId !== id) openPlan(id);
+    if (action.type === 'wall') {
+      var wall = walls.find(function (w) { return w.id === action.wallId; });
+      if (wall) editWallMeasurement(wall);
+    } else if (action.type === 'quote') {
+      setMode('quote');
+    }
+  }
+
+  function openResult(id) {
+    var plan = library.find(function (p) { return p.id === id; });
+    if (!plan || !plan.backend || !plan.backend.result) return toast('Nessun calcolo disponibile');
+    if (id === activePlanId) persistActive();
+    var res = plan.backend.result;
+    var planWalls = plan.walls || [];
+    resultPlanId = id;
+    resultHighlightWallId = null;
+    var st = statusInfo(res.status);
+    $('resultTitle').textContent = plan.name || 'Rilievo';
+    $('resultStamp').textContent = st.label + (res.version ? ' · versione ' + res.version : '') + ' · ' + new Date(res.receivedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    $('resultStale').classList.toggle('hidden', !isResultStale(res, payloadFingerprint(planPayload(plan))));
+
+    var ai = res.totals && res.totals.aiSummary;
+    $('resultAi').classList.toggle('hidden', !ai);
+    $('resultAi').textContent = ai ? '✨ ' + ai : '';
+
+    var qWrap = $('resultQuestions');
+    qWrap.innerHTML = '';
+    ((res.totals && res.totals.questions) || []).forEach(function (q) {
+      var action = questionAction(q, planWalls);
+      var btn = document.createElement('button');
+      btn.className = 'result-question' + (action.type !== 'info' ? ' actionable' : '');
+      btn.textContent = humanizeText(q, planWalls);
+      btn.addEventListener('click', function () { onQuestion(q); });
+      qWrap.appendChild(btn);
+    });
+
+    var t = res.totals || {};
+    var totals = $('resultTotals');
+    totals.innerHTML = '';
+    totals.appendChild(resultCard('PAVIMENTO', t.floorAreaM2, 'm²'));
+    totals.appendChild(resultCard('SOFFITTO', t.ceilingAreaM2, 'm²'));
+    totals.appendChild(resultCard('PARETI NETTE', t.netWallAreaM2, 'm²'));
+    totals.appendChild(resultCard('PARETI LORDE', t.grossWallAreaM2, 'm²'));
+    totals.appendChild(resultCard('PITTURA', t.paintAreaM2, 'm²'));
+    if (t.tilingAreaM2 > 0) totals.appendChild(resultCard('RIVESTIMENTO', t.tilingAreaM2, 'm²'));
+    totals.appendChild(resultCard('BATTISCOPA', t.skirtingM, 'm'));
+    totals.appendChild(resultCard('VOLUME', t.volumeM3, 'm³', 1));
+
+    var roomsWrap = $('resultRooms');
+    roomsWrap.innerHTML = '';
+    (res.rooms || []).forEach(function (room) {
+      var card = document.createElement('div');
+      card.className = 'result-room';
+      var h3 = document.createElement('h3');
+      h3.textContent = room.name + ' ';
+      var badge = document.createElement('span');
+      var qcls = room.quality === 'OK' ? 'ok' : room.quality === 'NEEDS_REVIEW' ? 'review' : 'estimated';
+      badge.className = 'surface-badge ' + qcls;
+      badge.textContent = qualityLabel(room.quality);
+      h3.appendChild(badge);
+      var sub = document.createElement('div');
+      sub.className = 'rr-sub';
+      sub.textContent = fmtNum(room.widthM, 2) + ' × ' + fmtNum(room.depthM, 2) + ' m · h ' + fmtNum(room.heightMm / 1000, 2) + ' m' +
+        (Number.isFinite(room.confidence) ? ' · affidabilità ' + Math.round(room.confidence * 100) + '%' : '');
+      var grid = document.createElement('div');
+      grid.className = 'result-room-grid';
+      grid.appendChild(cell('Pavimento', room.floorAreaM2, 'm²'));
+      grid.appendChild(cell('Soffitto', room.ceilingAreaM2, 'm²'));
+      grid.appendChild(cell('Pareti nette', room.netWallAreaM2, 'm²'));
+      grid.appendChild(cell('Pareti lorde', room.grossWallAreaM2, 'm²'));
+      grid.appendChild(cell('Porte e finestre', room.openingsAreaM2, 'm²'));
+      grid.appendChild(cell('Spallette', room.revealsAreaM2, 'm²'));
+      if (room.tilingAreaM2 != null) grid.appendChild(cell('Rivestimento h ' + fmtNum(room.tilingHeightMm / 1000, 2), room.tilingAreaM2, 'm²'));
+      grid.appendChild(cell('Pittura', room.paintAreaM2, 'm²'));
+      grid.appendChild(cell('Battiscopa', room.skirtingM, 'm'));
+      grid.appendChild(cell('Perimetro', room.perimeterM, 'm'));
+      grid.appendChild(cell('Volume', room.volumeM3, 'm³', 1));
+      card.appendChild(h3);
+      card.appendChild(sub);
+      card.appendChild(grid);
+      roomsWrap.appendChild(card);
+    });
+
+    var wallInfo = [];
+    (res.walls || []).forEach(function (w) {
+      var idx = planWalls.findIndex(function (x) { return x.id === w.id; });
+      var label = 'Muro ' + (idx + 1);
+      if (w.suspect && w.suggestedLengthMm) {
+        wallInfo.push('⚠ ' + label + ': misurato ' + fmtNum(w.declaredLengthMm / 1000, 3) + ' m, dal resto risulta ' + fmtNum(w.suggestedLengthMm / 1000, 3) + ' m');
+      } else if (w.lengthSource === 'CALCULATED') {
+        wallInfo.push('✓ ' + label + ': calcolato ' + fmtNum(w.calculatedLengthMm / 1000, 3) + ' m dalle altre misure');
+      } else if (w.lengthSource === 'SKETCH') {
+        wallInfo.push('≈ ' + label + ': stimato ' + fmtNum(w.calculatedLengthMm / 1000, 2) + ' m dallo schizzo — serve la misura');
+      }
+    });
+    $('resultWalls').textContent = wallInfo.join('\n');
+    $('resultWalls').style.whiteSpace = 'pre-line';
+
+    $('resultBackdrop').classList.remove('hidden');
+    requestAnimationFrame(renderResultCanvas);
+  }
+
+  function renderResultCanvas() {
+    var plan = resultPlan();
+    if (!plan || !plan.backend || !plan.backend.result) return;
+    drawBackendPlan($('resultCanvas'), plan.backend.result, { dpr: Math.min(3, window.devicePixelRatio || 1), highlightWallId: resultHighlightWallId });
+  }
+
+  function closeResult() {
+    $('resultBackdrop').classList.add('hidden');
+    resultPlanId = null;
+  }
+
+  function recalcFromResult() {
+    var id = resultPlanId;
+    closeResult();
+    if (id) runCalculation(id, false);
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result).split(',')[1] || ''); };
+      reader.onerror = function () { reject(new Error('lettura file fallita')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function saveBlob(blob, filename) {
+    var fs = nativePlugin('Filesystem');
+    var share = nativePlugin('Share');
+    if (fs && share) {
+      var data = await blobToBase64(blob);
+      var written = await fs.writeFile({ path: filename, data: data, directory: 'CACHE' });
+      await share.share({ title: filename, url: written.uri, dialogTitle: 'Salva o condividi ' + filename });
+      return;
+    }
+    if (typeof File === 'function' && navigator.canShare) {
+      var file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      }
+    }
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+
+  async function downloadResult(kind) {
+    var plan = resultPlan();
+    if (!plan || !plan.backend) return;
+    if (!settings.serverUrl || !settings.apiKey) return toast('Server non collegato');
+    toast('Scarico ' + kind.toUpperCase() + '…');
+    try {
+      var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, kind);
+      var name = 'GE360-' + String(plan.name || 'rilievo').replace(/[^a-z0-9_-]+/gi, '-') + '.' + kind;
+      await saveBlob(blob, name);
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      toast('Download non riuscito: ' + (e && e.message ? e.message : e));
+    }
+  }
+
 
   function exportJson() {
     persistActive();
     var plan = currentPlan();
     if (!plan || !plan.walls || !plan.walls.length) return toast('Prima fai uno schizzo');
     var missing = plan.walls.filter(function (w) { return !w.lengthCm; }).length;
-    if (missing) {
-      toast('Mancano ' + missing + ' misure');
-      return openNextMissing();
-    }
+    if (missing) toast(missing + ' muri senza misura: verranno calcolati dal server');
     var blob = new Blob([JSON.stringify(planPayload(plan), null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -2305,6 +2826,8 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     openings = [];
     rooms = [];
     notes = [];
+    diagonals = [];
+    quoteFirst = null;
     notePickMode = null;
     pendingNoteTarget = null;
     currentNoteId = null;
@@ -2326,6 +2849,8 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     $('surfacesBtn').classList.toggle('hidden', !has);
     $('presentBtn').classList.toggle('hidden', !has);
     $('notesBtn').classList.toggle('hidden', !has);
+    $('calcBtn').classList.toggle('hidden', !has);
+    $('quoteBtn').classList.toggle('hidden', !has);
     var notesTitle = $('notesBtn').querySelector('b');
     if (notesTitle) notesTitle.textContent = 'APPUNTI' + (notes.length ? ' · ' + notes.length : '');
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
@@ -2366,7 +2891,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
     var mid = worldToScreen({ x: (wall.a.x + wall.b.x) / 2, y: (wall.a.y + wall.b.y) / 2 });
     var x = mid.x;
     var y = mid.y;
-    var text = wall.lengthCm ? (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m' : '?';
+    var text = wall.lengthCm ? metersText(wall.lengthCm) + ' m' : '?';
     ctx.save();
     ctx.font = '900 13px system-ui';
     var width = Math.max(42, ctx.measureText(text).width + 16);
@@ -2502,6 +3027,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
       ctx.restore();
     });
     walls.forEach(drawMeasure);
+    drawDiagonals();
     openings.forEach(drawOpening);
     drawRoomLabels();
     drawNoteMarkers();
@@ -2544,6 +3070,8 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
       currentStroke = [p];
       $('emptyHint').classList.add('hidden');
       render();
+    } else if (mode === 'quote') {
+      handleQuotePick(p);
     } else if (mode === 'measure') {
       var hitWall = nearestWall(p);
       if (!hitWall) return toast('Tocca più vicino a un muro');
@@ -2613,7 +3141,9 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
   $('windowBtn').addEventListener('click', function () { setMode('window'); });
   $('measureBtn').addEventListener('click', startMeasureMode);
-  $('doneBtn').addEventListener('click', exportJson);
+  $('doneBtn').addEventListener('click', function () {
+    if (settings.serverUrl && settings.apiKey) openCalc(); else exportJson();
+  });
   $('undoBtn').addEventListener('click', undo);
   $('saveBtn').addEventListener('click', function () { persistActive(true); });
   $('toolsBtn').addEventListener('click', openTools);
@@ -2674,6 +3204,19 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   $('rewriteNoteBtn').addEventListener('click', rewriteCurrentNote);
   $('deleteNoteBtn').addEventListener('click', deleteCurrentNote);
   $('wallHeightInput').addEventListener('change', changeWallHeight);
+  $('calcBtn').addEventListener('click', function () { runTool(openCalc); });
+  $('quoteBtn').addEventListener('click', function () { runTool(function () { setMode('quote'); }); });
+  $('closeCalcBtn').addEventListener('click', closeCalc);
+  $('calcBackdrop').addEventListener('click', function (e) { if (e.target === $('calcBackdrop') && !calcBusy) closeCalc(); });
+  $('calcSendBtn').addEventListener('click', submitCalc);
+  $('calcExportBtn').addEventListener('click', function () { closeCalc(); exportJson(); });
+  $('closeResultBtn').addEventListener('click', closeResult);
+  $('resultRecalcBtn').addEventListener('click', recalcFromResult);
+  $('resultStaleBtn').addEventListener('click', recalcFromResult);
+  $('resultEditBtn').addEventListener('click', function () { var id = resultPlanId; closeResult(); if (id && id !== activePlanId) openPlan(id); });
+  $('resultPdfBtn').addEventListener('click', function () { downloadResult('pdf'); });
+  $('resultDxfBtn').addEventListener('click', function () { downloadResult('dxf'); });
+  $('resultPngBtn').addEventListener('click', function () { downloadResult('png'); });
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
@@ -2681,6 +3224,7 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
   window.addEventListener('resize', function () {
     resize();
     if (presentationModel) requestAnimationFrame(renderPresentation);
+    if (resultPlanId) requestAnimationFrame(renderResultCanvas);
   });
   document.addEventListener('visibilitychange', function () { if (document.hidden && activePlanId) persistActive(); });
 

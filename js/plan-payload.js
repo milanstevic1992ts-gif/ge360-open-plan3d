@@ -1,0 +1,136 @@
+/**
+ * GE360 Rilievo — costruzione del payload per il backend (contratto v4 + rilievo fedele v2).
+ *
+ * Regole:
+ * - lo schizzo è solo una traccia: le coordinate vanno così come sono;
+ * - un muro non misurato viaggia con lengthCm = null (il backend lo calcola dalle altre misure);
+ * - le quote punto-punto (diagonali, posizione tramezzi) sono agganciate agli estremi dei muri
+ *   e le coordinate vengono risolte al momento dell'invio, così seguono eventuali spostamenti.
+ */
+
+export const PLAN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const WALL_REFERENCES = ['interior', 'partitionAxis', 'axis'];
+export const DEFAULT_WALL_THICKNESS_CM = 12;
+
+const ROOM_TYPES = [
+  ['bagno', ['bagno', 'wc', 'servizio', 'lavanderia', 'doccia']],
+  ['cucina', ['cucina', 'cottura']],
+  ['camera', ['camera', 'letto', 'cameretta']],
+  ['soggiorno', ['soggiorno', 'salotto', 'sala', 'living', 'open space', 'pranzo']],
+  ['disimpegno', ['corridoio', 'disimpegno', 'ingresso', 'atrio']],
+  ['ripostiglio', ['ripostiglio', 'sgabuzzino', 'cabina']],
+  ['studio', ['studio', 'ufficio']],
+  ['esterno', ['terrazza', 'terrazzo', 'balcone', 'loggia', 'veranda']]
+];
+
+export function roomTypeFromName(name) {
+  const text = String(name || '').toLowerCase();
+  for (const [type, words] of ROOM_TYPES) {
+    if (words.some(w => text.includes(w))) return type;
+  }
+  return 'altro';
+}
+
+function positive(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function nonNegative(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+export function safePlanId(id) {
+  const raw = String(id || '');
+  if (PLAN_ID_RE.test(raw)) return raw;
+  const clean = raw.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  return clean || null;
+}
+
+/** Coordinate dell'estremo di un muro ({wallId, end}) o del punto salvato. */
+export function resolveAnchor(anchor, walls) {
+  if (!anchor) return null;
+  if (anchor.wallId) {
+    const wall = (walls || []).find(w => w.id === anchor.wallId);
+    const p = wall && wall[anchor.end === 'b' ? 'b' : 'a'];
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y };
+  }
+  if (Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) return { x: anchor.x, y: anchor.y };
+  return null;
+}
+
+export function buildPlanPayload(plan, extra = {}) {
+  const thicknessCm = positive(plan.wallThicknessCm) || DEFAULT_WALL_THICKNESS_CM;
+  const walls = (plan.walls || []).map(w => {
+    const out = Object.assign({}, w);
+    out.lengthCm = positive(w.lengthCm);
+    if (!positive(out.thicknessMm)) out.thicknessMm = Math.round(thicknessCm * 10);
+    return out;
+  });
+  const openings = (plan.openings || []).map(o => {
+    const out = Object.assign({}, o);
+    ['widthCm', 'heightCm'].forEach(k => { out[k] = positive(o[k]); });
+    ['offsetCm', 'sillHeightCm'].forEach(k => { out[k] = nonNegative(o[k]); });
+    if (o.type === 'door') delete out.sillHeightCm;
+    return out;
+  });
+  const rooms = (plan.rooms || []).map(r => {
+    const out = Object.assign({}, r);
+    out.type = r.type || roomTypeFromName(r.name);
+    out.heightCm = positive(r.heightCm);
+    out.tilingHeightCm = positive(r.tilingHeightCm);
+    if (out.heightCm == null) delete out.heightCm;
+    if (out.tilingHeightCm == null) delete out.tilingHeightCm;
+    return out;
+  });
+  const diagonals = [];
+  (plan.diagonals || []).forEach(d => {
+    const a = resolveAnchor(d.a, plan.walls);
+    const b = resolveAnchor(d.b, plan.walls);
+    const len = positive(d.lengthCm);
+    if (a && b && len) diagonals.push({ id: d.id, a, b, lengthCm: len });
+  });
+  const wallReference = WALL_REFERENCES.includes(plan.wallReference) ? plan.wallReference : 'interior';
+  return Object.assign({
+    version: 4,
+    kind: 'ge360-rough-survey',
+    planId: safePlanId(plan.id),
+    name: String(plan.name || 'Rilievo').slice(0, 200),
+    updatedAt: plan.updatedAt || new Date().toISOString(),
+    rawStrokes: plan.rawStrokes || [],
+    walls,
+    openings,
+    rooms,
+    diagonals,
+    notes: plan.notes || [],
+    wallHeightM: positive(plan.wallHeightM) || 2.70,
+    wallReference,
+    surfaces: plan.surfaceSummary || null
+  }, extra);
+}
+
+/** Impronta del contenuto geometrico: serve a capire se un risultato del server è ancora attuale. */
+export function payloadFingerprint(payload) {
+  const core = JSON.stringify({
+    walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.thicknessMm]),
+    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
+    rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
+    diagonals: payload.diagonals,
+    h: payload.wallHeightM,
+    ref: payload.wallReference
+  });
+  let h = 2166136261;
+  for (let i = 0; i < core.length; i++) {
+    h ^= core.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36) + '-' + core.length.toString(36);
+}
+
+export function measuredWallCount(payload) {
+  return (payload.walls || []).filter(w => positive(w.lengthCm)).length;
+}
+

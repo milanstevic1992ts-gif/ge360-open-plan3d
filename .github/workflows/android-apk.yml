@@ -36,7 +36,11 @@ jobs:
         run: |
           node --check js/app.js
           node --check js/backend-bridge.js
+          node --check js/backend-client.js
+          node --check js/backend-results.js
+          node --check js/plan-payload.js
           node scripts/test-backend-bridge.mjs
+          node scripts/test-backend-client.mjs
           node scripts/test-room-template.mjs
 
       - name: Prepare Capacitor Android
@@ -52,6 +56,9 @@ jobs:
             "webDir": "www",
             "server": {
               "androidScheme": "https"
+            },
+            "android": {
+              "allowMixedContent": true
             }
           }
           EOF

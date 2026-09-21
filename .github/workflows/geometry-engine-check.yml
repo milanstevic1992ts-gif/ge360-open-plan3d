@@ -20,6 +20,9 @@ jobs:
           cp js/app.js /tmp/ge360-app.mjs
           cp js/room-surfaces.js /tmp/room-surfaces.mjs
           cp js/sketch-snap.js /tmp/sketch-snap.mjs
+          node --check js/plan-payload.js
+          node --check js/backend-client.js
+          node --check js/backend-results.js
           node --check /tmp/ge360-app.mjs
           node --check /tmp/room-surfaces.mjs
           node --check /tmp/sketch-snap.mjs
@@ -277,13 +280,12 @@ jobs:
           print("DOM/module/package checks OK")
           PY
 
-      - name: Check backend syntax and v4 payload fields
+      - name: Backend client, payload v2 and result tests
         run: |
-          python3 -m py_compile backend/app.py
-          grep -q "version: int = 4" backend/app.py
-          grep -q "rooms: list" backend/app.py
-          grep -q "wallHeightM: float" backend/app.py
-          grep -q "surfaces: dict" backend/app.py
+          node scripts/test-backend-client.mjs
+          grep -q "buildPlanPayload" js/app.js
+          grep -q "processPlan" js/app.js
+          grep -q '"allowMixedContent": true' .github/workflows/android-apk.yml
 
       - name: Check frontend mobile interaction guards
         run: |
@@ -310,10 +312,6 @@ jobs:
           grep -q "plan.notes = clone(notes)" js/app.js
           grep -q "notes: plan.notes || \[\]" js/app.js
           grep -q "settings.serverUrl + '/notes/rewrite'" js/app.js
-          grep -q '@app.post("/api/v1/notes/rewrite"' backend/app.py
-          grep -q "require_key(x_ge360_api_key)" backend/app.py
-          grep -q "OLLAMA_BASE_URL" backend/app.py
-          grep -q "OLLAMA_MODEL" backend/app.py
 
       - name: Verify engine stays isolated
         run: |
