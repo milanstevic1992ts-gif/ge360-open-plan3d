@@ -43,6 +43,11 @@ jobs:
           node scripts/test-backend-client.mjs
           node scripts/test-room-template.mjs
 
+      - name: Set Android version
+        run: |
+          echo "GE360_VERSION_CODE=$((26000000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "GE360_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
       - name: Prepare Capacitor Android
         run: |
           rm -rf www android
@@ -66,16 +71,26 @@ jobs:
           npx cap sync android
           python3 scripts/prepare-android-native.py
 
-      - name: Build debug APK
+      - name: Build APKs
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          ./gradlew assembleDebug assembleRelease --stacktrace
 
-      - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk GE360-Rilievo-debug.apk
+      - name: Collect APKs
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk GE360-Rilievo-debug.apk
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk GE360-Rilievo-release-unsigned.apk
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: GE360-Rilievo-APK
           path: GE360-Rilievo-debug.apk
+          retention-days: 14
+
+      - name: Upload unsigned release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GE360-Rilievo-Release-Unsigned
+          path: GE360-Rilievo-release-unsigned.apk
           retention-days: 14

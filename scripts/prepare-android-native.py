@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
 ANDROID = ROOT / "android"
@@ -39,6 +40,10 @@ public class MainActivity extends BridgeActivity {
 gradle = APP / "build.gradle"
 text = gradle.read_text(encoding="utf-8")
 text = text.replace("minSdkVersion rootProject.ext.minSdkVersion", "minSdkVersion 26")
+version_code = os.getenv("GE360_VERSION_CODE", "26092101")
+version_name = os.getenv("GE360_VERSION_NAME", "1.1.0")
+text = text.replace("versionCode 1", f"versionCode {int(version_code)}")
+text = text.replace('versionName "1.0"', f'versionName "{version_name}"')
 marker = "// GE360_DIRECT_BRIDGE_NATIVE"
 if marker not in text:
     text += """
