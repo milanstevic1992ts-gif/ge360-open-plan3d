@@ -9,6 +9,7 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
 import { createOfflineQueue, isRetryableBackendError } from './offline-queue.js';
 import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetKey } from './photo-store.js';
 import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDevice, restoreLaserDevice, listenLaser } from './laser-client.js';
+import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForReference } from './opening-presets.js';
 
 (function () {
   'use strict';
@@ -71,6 +72,9 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
   var laserDevices = [];
   var laserListenerReady = false;
   var laserConnected = false;
+  var openingQuickIsNew = false;
+  var openingQuickOriginal = null;
+  var openingCustomFlow = false;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -629,9 +633,7 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
 
   function editOpening(opening) {
     if (!opening) return;
-    currentOpeningId = opening.id;
-    numberText = Number.isFinite(opening.widthCm) ? metersText(opening.widthCm) : '';
-    openSheet('opening-width');
+    openOpeningQuick(opening, false);
     render();
     vibrate(14);
   }
@@ -651,6 +653,10 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
     surfaceCache = null;
     persistActive();
     closeSheet();
+    $('openingQuickBackdrop').classList.add('hidden');
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    openingCustomFlow = false;
     updateUI();
     render();
     toast((label === 'porta' ? 'Porta' : 'Finestra') + ' eliminata');
@@ -1126,22 +1132,247 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
     if (existing) return editOpening(existing.opening);
     var hit = nearestWall(p);
     if (!hit) return toast('Tocca più vicino a un muro');
+
+    var lastKey = mode === 'door' ? (settings.lastDoorPreset || '80') : (settings.lastWindowPreset || 'single');
+    var initial = openingPresetSpec(mode, lastKey, settings) ||
+      openingPresetSpec(mode, mode === 'door' ? '80' : 'single', settings);
     checkpoint();
     var opening = {
       id: uid(mode === 'door' ? 'd' : 'f'),
       type: mode,
       wallId: hit.wall.id,
-      position: Math.max(.06, Math.min(.94, hit.t)),
-      widthCm: mode === 'door' ? 80 : 120,
+      position: Math.max(.02, Math.min(.98, hit.t)),
+      widthCm: initial ? initial.widthCm : (mode === 'door' ? 80 : 80),
+      heightCm: initial ? initial.heightCm : (mode === 'door' ? 210 : 120),
       referenceEnd: hit.t <= 0.5 ? 'a' : 'b',
-      offsetCm: null
+      offsetCm: null,
+      presetKey: null
     };
+    if (mode === 'window') opening.sillHeightCm = initial ? initial.sillHeightCm : 90;
     openings.push(opening);
-    currentOpeningId = opening.id;
-    numberText = (opening.widthCm / 100).toFixed(2).replace('.', ',');
-    openSheet('opening-width');
-    persistActive();
+    openOpeningQuick(opening, true);
     render();
+  }
+
+  function openingWall(opening) {
+    return opening ? walls.find(function (w) { return w.id === opening.wallId; }) : null;
+  }
+
+  function openingCmText(value) {
+    return Number.isFinite(Number(value)) ? String(Math.round(Number(value) * 10) / 10).replace('.', ',') : '';
+  }
+
+  function parseCmInput(id, allowZero) {
+    var raw = String($(id).value || '').trim().replace(',', '.');
+    if (!raw) return null;
+    var value = Number(raw);
+    if (!Number.isFinite(value) || (allowZero ? value < 0 : value <= 0)) return NaN;
+    return Math.round(value * 10) / 10;
+  }
+
+  function renderOpeningQuick() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    var isDoor = opening.type === 'door';
+    $('openingQuickTitle').textContent = isDoor ? 'Porta' : 'Finestra';
+    $('openingQuickHint').textContent = isDoor
+      ? 'Scegli 60, 70, 80 cm oppure Personalizzata. La posizione è già presa dal punto toccato.'
+      : 'Scegli Singola, Doppia oppure Personalizzata. Altezza e davanzale usano i preset salvati.';
+    $('doorPresetWrap').classList.toggle('hidden', !isDoor);
+    $('windowPresetWrap').classList.toggle('hidden', isDoor);
+    $('openingAdvancedSillRow').classList.toggle('hidden', isDoor);
+    $('deleteOpeningQuickBtn').classList.toggle('hidden', openingQuickIsNew);
+
+    var single = openingPresetSpec('window', 'single', settings);
+    var double = openingPresetSpec('window', 'double', settings);
+    $('singleWindowSize').textContent = single ? openingCmText(single.widthCm) + '×' + openingCmText(single.heightCm) + ' cm' : '';
+    $('doubleWindowSize').textContent = double ? openingCmText(double.widthCm) + '×' + openingCmText(double.heightCm) + ' cm' : '';
+
+    var active = openingQuickIsNew ? null : detectOpeningPreset(opening, settings);
+    var last = isDoor ? settings.lastDoorPreset : settings.lastWindowPreset;
+    document.querySelectorAll('#openingQuickBackdrop [data-opening-preset]').forEach(function (button) {
+      var visibleGroup = button.closest('#doorPresetWrap') ? isDoor : !isDoor;
+      var key = button.dataset.openingPreset;
+      button.classList.toggle('active', visibleGroup && key === active);
+      button.classList.toggle('last-used', visibleGroup && key === last);
+    });
+
+    var wall = openingWall(opening);
+    var side = openingReferenceLabel(opening);
+    var pos = Number.isFinite(opening.offsetCm)
+      ? openingCmText(opening.offsetCm) + ' cm dal lato ' + side.toLowerCase()
+      : 'posizione dal punto toccato';
+    $('openingPresetMeta').textContent =
+      (isDoor ? 'Porta' : 'Finestra') + ' · ' +
+      openingCmText(opening.widthCm) + ' cm · ' + pos;
+
+    $('openingAdvancedWidth').value = openingCmText(opening.widthCm);
+    $('openingAdvancedHeight').value = openingCmText(
+      Number.isFinite(opening.heightCm) ? opening.heightCm : (isDoor ? 210 : 120)
+    );
+    $('openingAdvancedSill').value = isDoor ? '' : openingCmText(
+      Number.isFinite(opening.sillHeightCm) ? opening.sillHeightCm : 90
+    );
+    $('openingAdvancedOffset').value = Number.isFinite(opening.offsetCm) ? openingCmText(opening.offsetCm) : '';
+    $('openingReferenceBtn').textContent = '↔ ORA MISURO DAL LATO ' + side + ' · CAMBIA LATO';
+    if (!wall || !Number.isFinite(wall.lengthCm)) {
+      $('openingAdvancedOffset').placeholder = 'da posizione schizzo';
+    } else {
+      $('openingAdvancedOffset').placeholder = 'automatica';
+    }
+  }
+
+  function openOpeningQuick(opening, isNew) {
+    if (!opening) return;
+    currentOpeningId = opening.id;
+    openingQuickIsNew = !!isNew;
+    openingQuickOriginal = isNew ? null : clone(opening);
+    openingCustomFlow = false;
+    $('openingAdvanced').open = false;
+    renderOpeningQuick();
+    $('openingQuickBackdrop').classList.remove('hidden');
+  }
+
+  function closeOpeningQuick(cancelNew) {
+    $('openingQuickBackdrop').classList.add('hidden');
+    if (cancelNew && openingQuickIsNew && currentOpeningId) {
+      openings = openings.filter(function (o) { return o.id !== currentOpeningId; });
+      surfaceCache = null;
+      persistActive();
+      render();
+    }
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    if (!openingCustomFlow) currentOpeningId = null;
+  }
+
+  function applyOpeningPreset(key) {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    if (key === 'custom') {
+      openingCustomFlow = true;
+      $('openingQuickBackdrop').classList.add('hidden');
+      numberText = Number.isFinite(opening.widthCm) ? metersText(opening.widthCm) : '';
+      openSheet('opening-width');
+      toast('Inserisci solo la larghezza · il laser può compilarla');
+      return;
+    }
+
+    var spec = openingPresetSpec(opening.type, key, settings);
+    if (!spec) return;
+    var wall = openingWall(opening);
+    var next = Object.assign({}, opening, {
+      widthCm: spec.widthCm,
+      heightCm: spec.heightCm,
+      presetKey: key
+    });
+    if (opening.type === 'window') next.sillHeightCm = spec.sillHeightCm;
+    var fit = fitOpeningToWall(next, wall && wall.lengthCm);
+    if (!fit.fits) return toast('Questa apertura è più larga del muro');
+
+    if (!openingQuickIsNew) checkpoint();
+    Object.assign(opening, fit.opening);
+    if (opening.type === 'door') settings.lastDoorPreset = key;
+    else settings.lastWindowPreset = key;
+    persistSettings();
+    surfaceCache = null;
+    persistActive();
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    currentOpeningId = null;
+    $('openingQuickBackdrop').classList.add('hidden');
+    updateUI();
+    render();
+    vibrate(22);
+    toast((opening.type === 'door' ? 'Porta ' + key + ' cm' : 'Finestra ' + (key === 'single' ? 'singola' : 'doppia')) + ' inserita ✓');
+  }
+
+  function toggleOpeningAdvancedReference() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    var wall = openingWall(opening);
+    var changed = offsetForReference(opening, wall && wall.lengthCm, opening.referenceEnd === 'a' ? 'b' : 'a');
+    Object.assign(opening, changed);
+    renderOpeningQuick();
+    render();
+  }
+
+  function saveOpeningAdvanced() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    var width = parseCmInput('openingAdvancedWidth', false);
+    var height = parseCmInput('openingAdvancedHeight', false);
+    var sill = opening.type === 'window' ? parseCmInput('openingAdvancedSill', true) : null;
+    var offset = parseCmInput('openingAdvancedOffset', true);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || (opening.type === 'window' && !Number.isFinite(sill))) {
+      return toast('Controlla larghezza, altezza e davanzale');
+    }
+    var wall = openingWall(opening);
+    if (wall && Number.isFinite(wall.lengthCm) && width > wall.lengthCm) return toast('L’apertura è più larga del muro');
+
+    if (!openingQuickIsNew) checkpoint();
+    opening.widthCm = width;
+    opening.heightCm = height;
+    if (opening.type === 'window') opening.sillHeightCm = sill;
+
+    if (Number.isFinite(offset)) {
+      if (wall && Number.isFinite(wall.lengthCm) && offset + width > wall.lengthCm) return toast('Distanza + apertura supera il muro');
+      opening.offsetCm = offset;
+      recalcOpeningPosition(opening);
+    } else {
+      var fit = fitOpeningToWall(opening, wall && wall.lengthCm);
+      if (fit.fits) Object.assign(opening, fit.opening);
+    }
+
+    var key = detectOpeningPreset(opening, settings);
+    opening.presetKey = key || 'custom';
+    if (opening.type === 'door') {
+      settings.doorHeightCm = height;
+      settings.lastDoorPreset = ['60','70','80'].includes(String(key)) ? String(key) : 'custom';
+    } else if (key === 'single') {
+      settings.windowSingleWidthCm = width;
+      settings.windowSingleHeightCm = height;
+      settings.windowSingleSillCm = sill;
+      settings.lastWindowPreset = 'single';
+    } else if (key === 'double') {
+      settings.windowDoubleWidthCm = width;
+      settings.windowDoubleHeightCm = height;
+      settings.windowDoubleSillCm = sill;
+      settings.lastWindowPreset = 'double';
+    } else {
+      settings.lastWindowPreset = 'custom';
+    }
+    persistSettings();
+    surfaceCache = null;
+    persistActive();
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    currentOpeningId = null;
+    $('openingQuickBackdrop').classList.add('hidden');
+    updateUI();
+    render();
+    toast('Apertura aggiornata ✓');
+  }
+
+  function cancelOpeningCustomFlow() {
+    if (!openingCustomFlow) return false;
+    var id = currentOpeningId;
+    if (openingQuickIsNew) {
+      openings = openings.filter(function (o) { return o.id !== id; });
+    } else if (openingQuickOriginal) {
+      var current = openings.find(function (o) { return o.id === id; });
+      if (current) Object.assign(current, clone(openingQuickOriginal));
+    }
+    openingCustomFlow = false;
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    currentOpeningId = null;
+    surfaceCache = null;
+    persistActive();
+    closeSheet();
+    render();
+    toast('Modifica annullata');
+    return true;
   }
 
   function recalcOpeningPosition(opening) {
@@ -1266,10 +1497,35 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
         toast('Misure completate ✓');
       }
     } else if (sheetType === 'opening-width') {
-      checkpoint();
       var op = openings.find(function (o) { return o.id === currentOpeningId; });
-      if (op) op.widthCm = metersToCm(meters);
+      var newWidth = metersToCm(meters);
+      var opWall = openingWall(op);
+      if (opWall && Number.isFinite(opWall.lengthCm) && newWidth > opWall.lengthCm) return toast('L’apertura è più larga del muro');
+      if (!openingQuickIsNew) checkpoint();
+      if (op) {
+        op.widthCm = newWidth;
+        op.presetKey = 'custom';
+        if (!Number.isFinite(op.heightCm)) op.heightCm = op.type === 'door' ? (Number(settings.doorHeightCm) || 210) : 120;
+        if (op.type === 'window' && !Number.isFinite(op.sillHeightCm)) op.sillHeightCm = 90;
+        var quickFit = fitOpeningToWall(op, opWall && opWall.lengthCm);
+        if (quickFit.fits) Object.assign(op, quickFit.opening);
+      }
       surfaceCache = null;
+      if (openingCustomFlow) {
+        if (op && op.type === 'door') settings.lastDoorPreset = 'custom';
+        if (op && op.type === 'window') settings.lastWindowPreset = 'custom';
+        persistSettings();
+        persistActive();
+        openingCustomFlow = false;
+        openingQuickIsNew = false;
+        openingQuickOriginal = null;
+        currentOpeningId = null;
+        closeSheet();
+        updateUI();
+        render();
+        toast('Misura personalizzata salvata ✓');
+        return;
+      }
       persistActive();
       numberText = op && Number.isFinite(op.offsetCm) ? metersText(op.offsetCm) : '';
       openSheet('opening-offset');
@@ -1328,6 +1584,7 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
   }
 
   function later() {
+    if (openingCustomFlow && sheetType === 'opening-width') return cancelOpeningCustomFlow();
     if (sheetType === 'diagonal') {
       pendingQuote = null;
       currentDiagonalId = null;
@@ -3493,6 +3750,14 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
       if (parts.length === 2 && parts.every(Number.isFinite)) setRectRoomPreset(parts[0], parts[1]);
     });
   });
+  $('closeOpeningQuickBtn').addEventListener('click', function () { closeOpeningQuick(true); });
+  $('openingQuickBackdrop').addEventListener('click', function (e) { if (e.target === $('openingQuickBackdrop')) closeOpeningQuick(true); });
+  document.querySelectorAll('#openingQuickBackdrop [data-opening-preset]').forEach(function (button) {
+    button.addEventListener('click', function () { applyOpeningPreset(button.dataset.openingPreset); });
+  });
+  $('openingReferenceBtn').addEventListener('click', toggleOpeningAdvancedReference);
+  $('saveOpeningAdvancedBtn').addEventListener('click', saveOpeningAdvanced);
+  $('deleteOpeningQuickBtn').addEventListener('click', deleteCurrentOpening);
   $('clearBtn').addEventListener('click', function () { runTool(clearAll); });
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);

@@ -137,3 +137,28 @@
 .note-photo-tools{display:flex;align-items:center;gap:9px;margin-top:11px}.note-photo-tools button{height:46px;border-radius:14px;padding:0 13px;font-weight:1000}.note-photo-tools span{font-size:10px;color:#64748b;font-weight:900}
 .note-photos{display:grid;gap:6px;margin-top:7px}.note-photo{padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#475569}.note-photo b{color:#0f172a}.note-photo .uploaded{color:#15803d}.note-photo .pending{color:#b45309}
 .backend-badge.pending{background:#fef3c7;color:#92400e}
+
+
+/* Aperture rapide: preset prima, quote tecniche solo in Avanzate */
+.opening-quick-card{width:100%;max-width:520px;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.30)}
+.opening-quick-hint{margin:0 0 12px;color:#64748b;font-size:12px;line-height:1.45}
+.opening-preset-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.opening-preset-grid.window{grid-template-columns:repeat(3,1fr)}
+.opening-preset-grid button{position:relative;min-height:82px;border:1px solid #dbe3ef;border-radius:16px;background:#f8fafc;color:#0f172a;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:8px 5px;font-weight:1000}
+.opening-preset-grid button b{font-size:24px;line-height:1}
+.opening-preset-grid button small{font-size:9px;font-weight:1000;color:#64748b}
+.opening-preset-grid button span{font-size:9px;color:#64748b;font-weight:900;margin-top:2px}
+.opening-preset-grid button.custom b{font-size:21px}
+.opening-preset-grid button.active{border-color:#2563eb;background:#eff6ff;color:#1d4ed8;box-shadow:0 0 0 2px rgba(37,99,235,.10)}
+.opening-preset-grid button.last-used::after{content:"ULTIMA";position:absolute;top:-6px;right:5px;border-radius:999px;background:#0f172a;color:#fff;padding:3px 5px;font-size:7px;letter-spacing:.04em}
+.opening-preset-meta{margin:10px 0 0;padding:9px 11px;border-radius:12px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:800;line-height:1.4}
+.opening-advanced{margin-top:10px;border:1px solid #e2e8f0;border-radius:15px;overflow:hidden}
+.opening-advanced summary{cursor:pointer;list-style:none;padding:13px 12px;color:#334155;font-size:10px;font-weight:1000;background:#f8fafc}
+.opening-advanced summary::-webkit-details-marker{display:none}
+.opening-advanced summary span{float:right;color:#94a3b8;font-size:8px;font-weight:800}
+.opening-advanced-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding:12px 12px 5px}
+.opening-advanced-grid label{font-size:10px;font-weight:1000;color:#475569}
+.opening-reference-btn{width:calc(100% - 24px);margin:5px 12px 10px;min-height:42px;border-radius:12px;background:#f1f5f9;color:#334155;font-size:9px;font-weight:1000}
+.opening-advanced .primary{width:calc(100% - 24px);margin:0 12px 12px}
+.opening-quick-card>.delete-opening{margin-top:10px}
+@media(max-width:390px){.opening-preset-grid{grid-template-columns:repeat(2,1fr)}.opening-preset-grid.window{grid-template-columns:repeat(3,1fr)}.opening-preset-grid button{min-height:74px}.opening-advanced-grid{grid-template-columns:1fr}}

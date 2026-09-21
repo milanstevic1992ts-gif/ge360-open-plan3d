@@ -99,6 +99,53 @@
     </section>
   </div>
 
+  <div id="openingQuickBackdrop" class="modal-backdrop hidden">
+    <section class="opening-quick-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">APERTURA</div><h2 id="openingQuickTitle">Porta</h2></div>
+        <button id="closeOpeningQuickBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p id="openingQuickHint" class="opening-quick-hint">Scegli la misura. La posizione è già presa dal punto toccato sul muro.</p>
+
+      <div id="doorPresetWrap" class="opening-preset-grid">
+        <button data-opening-preset="60"><b>60</b><small>cm</small></button>
+        <button data-opening-preset="70"><b>70</b><small>cm</small></button>
+        <button data-opening-preset="80"><b>80</b><small>cm</small></button>
+        <button data-opening-preset="custom" class="custom"><b>✎</b><small>PERSONALIZZATA</small></button>
+      </div>
+
+      <div id="windowPresetWrap" class="opening-preset-grid window hidden">
+        <button data-opening-preset="single"><b>▯</b><small>SINGOLA</small><span id="singleWindowSize"></span></button>
+        <button data-opening-preset="double"><b>▯▯</b><small>DOPPIA</small><span id="doubleWindowSize"></span></button>
+        <button data-opening-preset="custom" class="custom"><b>✎</b><small>PERSONALIZZATA</small></button>
+      </div>
+
+      <div id="openingPresetMeta" class="opening-preset-meta"></div>
+
+      <details id="openingAdvanced" class="opening-advanced">
+        <summary>⚙ AVANZATE <span>solo se servono quote precise</span></summary>
+        <div class="opening-advanced-grid">
+          <label>Larghezza
+            <div class="rect-room-input"><input id="openingAdvancedWidth" inputmode="decimal"><span>cm</span></div>
+          </label>
+          <label>Altezza
+            <div class="rect-room-input"><input id="openingAdvancedHeight" inputmode="decimal"><span>cm</span></div>
+          </label>
+          <label id="openingAdvancedSillRow">Davanzale
+            <div class="rect-room-input"><input id="openingAdvancedSill" inputmode="decimal"><span>cm</span></div>
+          </label>
+          <label>Distanza dall’angolo
+            <div class="rect-room-input"><input id="openingAdvancedOffset" inputmode="decimal" placeholder="automatica"><span>cm</span></div>
+          </label>
+        </div>
+        <button id="openingReferenceBtn" class="opening-reference-btn">↔ MISURA DAL LATO OPPOSTO</button>
+        <button id="saveOpeningAdvancedBtn" class="primary block">SALVA DATI AVANZATI ✓</button>
+      </details>
+
+      <button id="deleteOpeningQuickBtn" class="delete-opening hidden">🗑 ELIMINA APERTURA</button>
+    </section>
+  </div>
+
   <div id="settingsBackdrop" class="modal-backdrop hidden">
     <section class="settings-card">
       <div class="settings-head"><div><div class="eyebrow dark">GE360 DIRECT BRIDGE</div><h2>Collega il backend</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>

@@ -39,9 +39,11 @@ jobs:
           node --check js/backend-client.js
           node --check js/backend-results.js
           node --check js/plan-payload.js
+          node --check js/opening-presets.js
           node scripts/test-backend-bridge.mjs
           node scripts/test-backend-client.mjs
           node scripts/test-room-template.mjs
+          node scripts/test-opening-presets.mjs
 
       - name: Set Android version
         run: |

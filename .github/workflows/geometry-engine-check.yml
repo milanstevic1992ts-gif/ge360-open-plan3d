@@ -31,6 +31,7 @@ jobs:
           node --check js/offline-queue.js
           node --check js/photo-store.js
           node --check js/laser-client.js
+          node --check js/opening-presets.js
           node --check /tmp/ge360-app.mjs
           node --check /tmp/room-surfaces.mjs
           node --check /tmp/sketch-snap.mjs
@@ -292,6 +293,7 @@ jobs:
         run: |
           node scripts/test-backend-client.mjs
           node scripts/test-offline-queue.mjs
+          node scripts/test-opening-presets.mjs
           grep -q "buildPlanPayload" js/app.js
           grep -q "processPlan" js/app.js
           grep -q '"allowMixedContent": true' .github/workflows/android-apk.yml
