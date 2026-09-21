@@ -944,12 +944,13 @@ export function searchWorkCatalog(catalog, query, { roomType = 'altro', usage = 
     if (!match) return null;
     const count = Number(row.count || 0);
     const recent = row.lastUsedAt ? Math.max(0, 40 - Math.floor((Date.now() - Date.parse(row.lastUsedAt)) / 86400000)) : 0;
+    const usageScore = q ? Math.min(100, count * 5) : Math.min(1200, count * 120);
     const score =
       (q ? match * 10 : 0) +
       Number(item.basePriority || 0) +
-      Math.min(220, count * 12) +
+      usageScore +
       recent +
-      (row.favorite ? 1000 : 0) +
+      (row.favorite ? 1400 : 0) +
       roomBoost(item, roomType);
     return { item, score, usage: row };
   }).filter(Boolean)
