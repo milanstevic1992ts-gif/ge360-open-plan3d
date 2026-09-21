@@ -1,4 +1,4 @@
-export const WORK_CATALOG_VERSION = "2026.09.21.1";
+export const WORK_CATALOG_VERSION = "2026.09.22.2";
 export const BUNDLED_WORK_CATALOG = [
   {
     "id": "paint.walls",
@@ -89,7 +89,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "tiles.remove.wall",
     "label": "Rimozione piastrelle pareti",
     "category": "Demolizioni",
-    "quantityRule": "ROOM_NET_WALLS",
+    "quantityRule": "ROOM_TILING_OR_NET_WALLS",
     "unit": "m²",
     "basePriority": 150,
     "synonyms": [
@@ -114,7 +114,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "tiles.install.wall",
     "label": "Posa piastrelle pareti",
     "category": "Rivestimenti",
-    "quantityRule": "ROOM_NET_WALLS",
+    "quantityRule": "ROOM_TILING_OR_NET_WALLS",
     "unit": "m²",
     "basePriority": 150,
     "synonyms": [
@@ -247,7 +247,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "wall.demolish",
     "label": "Demolizione parete",
     "category": "Demolizioni",
-    "quantityRule": "MANUAL",
+    "quantityRule": "WALL_GROSS_AREA",
     "unit": "m²",
     "basePriority": 140,
     "synonyms": [
@@ -260,7 +260,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "wall.partition",
     "label": "Nuova parete in laterizio",
     "category": "Muratura",
-    "quantityRule": "MANUAL",
+    "quantityRule": "WALL_GROSS_AREA",
     "unit": "m²",
     "basePriority": 110,
     "synonyms": [
@@ -272,7 +272,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "wall.restore",
     "label": "Ripristino muratura",
     "category": "Muratura",
-    "quantityRule": "MANUAL",
+    "quantityRule": "WALL_GROSS_AREA",
     "unit": "m²",
     "basePriority": 100,
     "synonyms": [
@@ -332,7 +332,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "drywall.wall",
     "label": "Controparete cartongesso",
     "category": "Cartongesso",
-    "quantityRule": "MANUAL",
+    "quantityRule": "WALL_GROSS_AREA",
     "unit": "m²",
     "basePriority": 110,
     "synonyms": [
@@ -344,7 +344,7 @@ export const BUNDLED_WORK_CATALOG = [
     "id": "drywall.partition",
     "label": "Parete divisoria cartongesso",
     "category": "Cartongesso",
-    "quantityRule": "MANUAL",
+    "quantityRule": "WALL_GROSS_AREA",
     "unit": "m²",
     "basePriority": 105,
     "synonyms": [
