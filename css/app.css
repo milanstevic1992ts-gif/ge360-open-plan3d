@@ -127,3 +127,13 @@
 .result-actions{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;margin-top:10px;position:sticky;bottom:0;background:#fff;padding:8px 0 4px}.result-actions button{min-height:54px;border-radius:17px;font-weight:1000}
 .plan-card .backend-badge{display:inline-block;margin-top:4px;padding:3px 7px;border-radius:999px;font-size:9px;font-weight:1000;background:#e2e8f0;color:#475569}.backend-badge.ok{background:#dcfce7;color:#166534}.backend-badge.review{background:#fef3c7;color:#92400e}.backend-badge.error{background:#fee2e2;color:#b91c1c}
 @media(max-width:390px){.calc-grid,.room-extra{grid-template-columns:1fr}}
+
+
+/* Offline sync, laser BLE and photographic evidence */
+.laser-connect{margin-top:12px;padding:14px;border-radius:18px;background:#f8fafc;border:1px solid #cbd5e1}
+.laser-connect p{margin:10px 0;font-size:12px;line-height:1.4;color:#475569}
+.laser-scan-btn{width:100%;min-height:50px;border-radius:15px;background:#334155;color:#fff;font-weight:1000;font-size:12px}
+.laser-select{width:100%;height:48px;margin-top:8px;border:1px solid #cbd5e1;border-radius:13px;padding:0 10px;background:#fff;color:#0f172a;font-weight:800}
+.note-photo-tools{display:flex;align-items:center;gap:9px;margin-top:11px}.note-photo-tools button{height:46px;border-radius:14px;padding:0 13px;font-weight:1000}.note-photo-tools span{font-size:10px;color:#64748b;font-weight:900}
+.note-photos{display:grid;gap:6px;margin-top:7px}.note-photo{padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#475569}.note-photo b{color:#0f172a}.note-photo .uploaded{color:#15803d}.note-photo .pending{color:#b45309}
+.backend-badge.pending{background:#fef3c7;color:#92400e}

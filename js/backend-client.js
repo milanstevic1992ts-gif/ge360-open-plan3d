@@ -113,6 +113,32 @@ export function createBackendClient({ baseUrl, apiKey, fetchImpl, timeoutMs = 15
     return request('/plans/' + encodeURIComponent(planId) + '/' + artifact, { as: 'blob', timeout: 30000 });
   }
 
-  return { api, request, submitPlan, waitForJob, fetchResult, processPlan, downloadArtifact };
+  async function uploadPhoto(planId, blob, meta = {}) {
+    if (typeof FormData === 'undefined') throw new BackendError('FormData non disponibile', { code: 'NO_FORMDATA' });
+    const form = new FormData();
+    const filename = meta.filename || 'cantiere.jpg';
+    form.append('file', blob, filename);
+    form.append('targetType', meta.targetType || 'plan');
+    if (meta.targetId) form.append('targetId', meta.targetId);
+    if (meta.caption) form.append('caption', meta.caption);
+    let res;
+    try {
+      const headers = {};
+      if (apiKey) headers['X-GE360-API-Key'] = apiKey;
+      res = await doFetch(api + '/plans/' + encodeURIComponent(planId) + '/photos', {
+        method: 'POST', headers, body: form
+      });
+    } catch (_) {
+      throw new BackendError('Server non raggiungibile: foto conservata sul telefono', { code: 'NETWORK' });
+    }
+    if (!res.ok) throw new BackendError('Caricamento foto fallito (HTTP ' + res.status + ')', { status: res.status, code: 'HTTP_' + res.status });
+    return res.json();
+  }
+
+  async function listPhotos(planId) {
+    return request('/plans/' + encodeURIComponent(planId) + '/photos');
+  }
+
+  return { api, request, submitPlan, waitForJob, fetchResult, processPlan, downloadArtifact, uploadPhoto, listPhotos };
 }
 

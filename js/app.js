@@ -6,6 +6,8 @@ import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
 import { buildPlanPayload, payloadFingerprint, measuredWallCount, roomTypeFromName, DEFAULT_WALL_THICKNESS_CM } from './plan-payload.js';
 import { createBackendClient } from './backend-client.js';
 import { compactResult, humanizeText, questionAction, isResultStale, statusInfo, qualityLabel, fmtNum, drawBackendPlan } from './backend-results.js';
+import { createOfflineQueue, isRetryableBackendError } from './offline-queue.js';
+import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetKey } from './photo-store.js';
 
 (function () {
   'use strict';
@@ -62,6 +64,9 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
   var calcBusy = false;
   var resultPlanId = null;
   var resultHighlightWallId = null;
+  var offlineQueue = createOfflineQueue(localStorage);
+  var syncBusy = false;
+  var photoCaptureTarget = null;
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -106,10 +111,12 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
 
   function loadAll() {
     library = parse(localStorage.getItem(LIBRARY_KEY), []);
+    library.forEach(function (plan) { if (!Array.isArray(plan.photos)) plan.photos = []; });
     settings = Object.assign(settings, parse(localStorage.getItem(SETTINGS_KEY), {}));
     renderDashboard();
     updateServerBadge();
     restoreBridgeTunnel();
+    setTimeout(function () { flushOfflineQueue(); flushPendingPhotos(); }, 1200);
   }
 
   function currentPlan() {
@@ -117,9 +124,20 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
     return null;
   }
 
+  function authoritativeResult(plan) {
+    if (!plan || !plan.backend || !plan.backend.result) return null;
+    var result = plan.backend.result;
+    try {
+      if (isResultStale(result, payloadFingerprint(planPayload(plan)))) return null;
+    } catch (_) { return null; }
+    return result;
+  }
+
   function summary(plan) {
     var ws = plan ? (plan.walls || []) : walls;
     var os = plan ? (plan.openings || []) : openings;
+    var authoritative = plan ? authoritativeResult(plan) : null;
+    var serverFloor = authoritative && authoritative.totals && authoritative.totals.floorAreaM2;
     return {
       walls: ws.length,
       missing: ws.filter(function (w) { return !w.lengthCm; }).length,
@@ -127,7 +145,10 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
       windows: os.filter(function (o) { return o.type === 'window'; }).length,
       rooms: plan ? (plan.rooms || []).length : rooms.length,
       notes: plan ? (plan.notes || []).length : notes.length,
-      floorM2: plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null
+      photos: plan ? (plan.photos || []).length : 0,
+      floorM2: Number.isFinite(serverFloor) ? serverFloor :
+        (plan && plan.surfaceSummary && Number.isFinite(plan.surfaceSummary.floorM2) ? plan.surfaceSummary.floorM2 : null),
+      authoritative: !!authoritative
     };
   }
 
@@ -181,6 +202,7 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
       openings: [],
       rooms: [],
       notes: [],
+      photos: [],
       wallHeightM: 2.70,
       diagonals: [],
       wallThicknessCm: DEFAULT_WALL_THICKNESS_CM,
@@ -270,7 +292,14 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
       h3.textContent = plan.name || 'Rilievo';
       var meta = document.createElement('div');
       meta.className = 'plan-meta';
-      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m² · ' : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
+      meta.textContent = s.walls + ' muri · ' + (s.rooms ? s.rooms + ' ambienti · ' : '') + (s.notes ? s.notes + ' appunti · ' : '') + (s.photos ? s.photos + ' foto · ' : '') + (Number.isFinite(s.floorM2) ? s.floorM2.toFixed(1).replace('.', ',') + ' m²' + (s.authoritative ? ' server · ' : ' indicativi · ') : '') + (s.missing ? s.missing + ' misure mancanti' : 'misure complete') + ' · ' + date;
+      if (offlineQueue.has(plan.id)) {
+        var pendingSync = document.createElement('span');
+        pendingSync.className = 'backend-badge pending';
+        pendingSync.textContent = 'DA INVIARE';
+        meta.appendChild(document.createElement('br'));
+        meta.appendChild(pendingSync);
+      }
 
       var actions = document.createElement('div');
       actions.className = 'plan-actions';
@@ -805,8 +834,124 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
     $('noteRawText').value = existing ? existing.rawText || '' : '';
     $('deleteNoteBtn').classList.toggle('hidden', !existing);
     renderNoteAi(existing);
+    renderNotePhotos();
     $('noteEditorBackdrop').classList.remove('hidden');
     requestAnimationFrame(function () { $('noteRawText').focus(); });
+  }
+
+
+  function notePhotoTarget() {
+    if (!pendingNoteTarget) return null;
+    return {
+      type: pendingNoteTarget.type === 'floor' || pendingNoteTarget.type === 'ceiling' ? 'room' : pendingNoteTarget.type,
+      id: pendingNoteTarget.id,
+      label: pendingNoteTarget.label || 'Foto cantiere'
+    };
+  }
+
+  function renderNotePhotos() {
+    var plan = currentPlan();
+    var target = notePhotoTarget();
+    var wrap = $('notePhotos');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    if (!plan || !target) {
+      $('notePhotoCount').textContent = 'Nessuna foto';
+      return;
+    }
+    var key = photoTargetKey(target.type, target.id);
+    var list = (plan.photos || []).filter(function (p) { return p.targetKey === key; });
+    $('notePhotoCount').textContent = list.length ? list.length + (list.length === 1 ? ' foto' : ' foto') : 'Nessuna foto';
+    list.forEach(function (p) {
+      var row = document.createElement('div');
+      row.className = 'note-photo';
+      var left = document.createElement('span');
+      left.innerHTML = '<b>📷 ' + String(p.filename || 'Foto').replace(/[<>]/g, '') + '</b>';
+      var state = document.createElement('span');
+      state.className = p.uploaded ? 'uploaded' : 'pending';
+      state.textContent = p.uploaded ? 'SERVER ✓' : 'DA INVIARE';
+      row.appendChild(left);
+      row.appendChild(state);
+      wrap.appendChild(row);
+    });
+  }
+
+  function capturePhotoForCurrentTarget() {
+    var target = notePhotoTarget();
+    if (!target) return toast('Seleziona prima un muro o una stanza');
+    photoCaptureTarget = target;
+    $('photoInput').value = '';
+    $('photoInput').click();
+  }
+
+  async function onPhotoSelected() {
+    var input = $('photoInput');
+    var file = input.files && input.files[0];
+    var plan = currentPlan();
+    var target = photoCaptureTarget;
+    if (!file || !plan || !target) return;
+    var id = uid('photo');
+    var meta = {
+      id: id,
+      planId: plan.id,
+      targetType: target.type,
+      targetId: target.id || null,
+      targetKey: photoTargetKey(target.type, target.id),
+      caption: target.label,
+      filename: file.name || (id + '.jpg'),
+      mimeType: file.type || 'image/jpeg',
+      size: file.size || 0,
+      createdAt: new Date().toISOString(),
+      uploaded: false
+    };
+    try {
+      await savePhotoBlob(Object.assign({}, meta, { blob: file }));
+      if (!Array.isArray(plan.photos)) plan.photos = [];
+      plan.photos.push(meta);
+      saveLibrary();
+      renderNotePhotos();
+      toast('Foto salvata sul telefono ✓');
+      flushPendingPhotos();
+    } catch (e) {
+      toast('Impossibile salvare la foto: ' + (e.message || e));
+    } finally {
+      photoCaptureTarget = null;
+      input.value = '';
+    }
+  }
+
+  async function syncPlanPhotos(plan, remotePlanId) {
+    if (!plan || !settings.serverUrl || !settings.apiKey) return;
+    var pending = (plan.photos || []).filter(function (p) { return !p.uploaded; });
+    if (!pending.length) return;
+    var client = backendClient();
+    for (var i = 0; i < pending.length; i++) {
+      var meta = pending[i];
+      var stored = await getPhotoBlob(meta.id);
+      if (!stored || !stored.blob) continue;
+      try {
+        var result = await client.uploadPhoto(remotePlanId || plan.id, stored.blob, meta);
+        meta.uploaded = true;
+        meta.uploadedAt = new Date().toISOString();
+        meta.remoteId = result && result.photo ? result.photo.id : null;
+        meta.remoteUrl = result && result.photo ? result.photo.url : null;
+        saveLibrary();
+      } catch (e) {
+        if (isRetryableBackendError(e)) break;
+        meta.uploadError = e.message || String(e);
+        saveLibrary();
+      }
+    }
+    if (plan.id === activePlanId) renderNotePhotos();
+  }
+
+  async function flushPendingPhotos() {
+    if (!settings.serverUrl || !settings.apiKey || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    for (var i = 0; i < library.length; i++) {
+      var plan = library[i];
+      if (!plan.backend || !plan.backend.planId) continue;
+      try { await syncPlanPhotos(plan, plan.backend.planId); } catch (_) {}
+    }
   }
 
   function closeNoteEditor(saveDraft) {
@@ -1803,6 +1948,11 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
 
   function openSurfaces() {
     cancelPickModes();
+    var serverResult = authoritativeResult(currentPlan());
+    if (serverResult) {
+      toast('Mostro il calcolo autorevole del server');
+      return openResult(activePlanId);
+    }
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
@@ -1960,6 +2110,11 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
 
   function openPresentation() {
     cancelPickModes();
+    var serverResult = authoritativeResult(currentPlan());
+    if (serverResult) {
+      toast('Presentazione dal risultato autorevole del server');
+      return openResult(activePlanId);
+    }
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
@@ -2197,10 +2352,11 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
   function updateServerBadge() {
     var configured = !!settings.serverUrl;
     $('serverBadge').className = 'server-badge ' + (settings.bridgeConnected || configured ? 'online' : 'offline');
+    var queued = offlineQueue.count();
     if (settings.bridgeConnected) {
-      $('serverBadge').textContent = '● GE360 Bridge collegato';
+      $('serverBadge').textContent = '● GE360 Bridge collegato' + (queued ? ' · ' + queued + ' da inviare' : '');
     } else if (configured && settings.apiKey) {
-      $('serverBadge').textContent = '● Debian configurato';
+      $('serverBadge').textContent = '● Debian configurato' + (queued ? ' · ' + queued + ' da inviare' : '');
     } else if (settings.bridgeConfigured) {
       $('serverBadge').textContent = '● Bridge pronto · da collegare';
     } else {
@@ -2254,6 +2410,7 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
         toast('Tunnel attivo · backend non ancora raggiungibile');
       }
       profile.wireguardConfig = '';
+      if (settings.bridgeConnected) setTimeout(flushOfflineQueue, 250);
     } catch (e) {
       renderBridgeSettings();
       var message = e && e.message ? e.message : 'scansione annullata';
@@ -2299,6 +2456,7 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
           var probe = await probeServer(settings.serverUrl, settings.apiKey);
           toast(probe.authenticated ? 'Backend GE360 collegato ✓' : 'Tunnel collegato ✓ · inserisci API Key');
         } catch (_) { toast('Tunnel attivo · backend non raggiungibile'); }
+        setTimeout(flushOfflineQueue, 250);
       }
     } catch (e) {
       settings.bridgeConnected = false;
@@ -2546,6 +2704,64 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
     runCalculation(id, false);
   }
 
+
+  function queueCalculation(plan, payload, error) {
+    offlineQueue.enqueue(payload, payloadFingerprint(payload));
+    plan.backend = Object.assign({}, plan.backend || {}, {
+      planId: payload.planId,
+      status: 'PENDING_SYNC',
+      syncStatus: 'PENDING',
+      queuedAt: new Date().toISOString(),
+      lastError: error && error.message ? error.message : 'Backend non raggiungibile'
+    });
+    saveLibrary();
+    updateServerBadge();
+    renderDashboard();
+  }
+
+  async function flushOfflineQueue() {
+    if (syncBusy || !settings.serverUrl || !settings.apiKey) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    var items = offlineQueue.list();
+    if (!items.length) {
+      flushPendingPhotos();
+      return;
+    }
+    syncBusy = true;
+    try {
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var plan = library.find(function (p) { return p.id === item.planId; });
+        if (!plan) { offlineQueue.remove(item.planId); continue; }
+        try {
+          var out = await backendClient().processPlan(item.payload);
+          var compact = compactResult(out.status, out.processed, { fingerprint: item.fingerprint });
+          plan.backend = {
+            planId: out.submission.planId,
+            sentAt: new Date().toISOString(),
+            status: compact.status,
+            syncStatus: 'SYNCED',
+            result: compact,
+            lastError: null
+          };
+          offlineQueue.remove(item.planId);
+          saveLibrary();
+          await syncPlanPhotos(plan, out.submission.planId);
+        } catch (e) {
+          offlineQueue.markError(item.planId, e.message || e);
+          if (isRetryableBackendError(e)) break;
+          plan.backend = Object.assign({}, plan.backend || {}, { syncStatus: 'BLOCKED', lastError: e.message || String(e) });
+          saveLibrary();
+          break;
+        }
+      }
+    } finally {
+      syncBusy = false;
+      updateServerBadge();
+      renderDashboard();
+    }
+  }
+
   async function runCalculation(id, fromModal) {
     if (calcBusy) return toast('Calcolo già in corso…');
     var plan = library.find(function (p) { return p.id === id; });
@@ -2566,19 +2782,28 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
         planId: out.submission.planId,
         sentAt: new Date().toISOString(),
         status: compact.status,
+        syncStatus: 'SYNCED',
         result: compact,
         lastError: null
       };
+      offlineQueue.remove(plan.id);
       saveLibrary();
+      await syncPlanPhotos(plan, out.submission.planId);
       if (fromModal) closeCalc();
       openResult(id);
     } catch (e) {
       var message = e && e.message ? e.message : String(e);
-      plan.backend = Object.assign({}, plan.backend || {}, { lastError: message, lastErrorAt: new Date().toISOString() });
-      saveLibrary();
-      toast('Calcolo non riuscito: ' + message);
-      vibrate(80);
-      if (e && e.status === 401) { closeCalc(); openSettings(); }
+      if (isRetryableBackendError(e) && settings.serverUrl && settings.apiKey) {
+        queueCalculation(plan, payload, e);
+        if (fromModal) closeCalc();
+        toast('Rilievo salvato offline · invio automatico quando torna il Bridge');
+      } else {
+        plan.backend = Object.assign({}, plan.backend || {}, { lastError: message, lastErrorAt: new Date().toISOString() });
+        saveLibrary();
+        toast('Calcolo non riuscito: ' + message);
+        vibrate(80);
+        if (e && e.status === 401) { closeCalc(); openSettings(); }
+      }
     } finally {
       calcBusy = false;
       if (fromModal) { setCalcProgress(null); $('calcSendBtn').disabled = false; }
@@ -3200,6 +3425,8 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
   });
   $('closeNoteEditorBtn').addEventListener('click', function () { closeNoteEditor(true); });
   $('noteEditorBackdrop').addEventListener('click', function (e) { if (e.target === $('noteEditorBackdrop')) closeNoteEditor(true); });
+  $('addPhotoBtn').addEventListener('click', capturePhotoForCurrentTarget);
+  $('photoInput').addEventListener('change', onPhotoSelected);
   $('saveRawNoteBtn').addEventListener('click', function () { saveCurrentNote(false); });
   $('rewriteNoteBtn').addEventListener('click', rewriteCurrentNote);
   $('deleteNoteBtn').addEventListener('click', deleteCurrentNote);
@@ -3221,6 +3448,8 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
   $('settingsBackdrop').addEventListener('click', function (e) { if (e.target === $('settingsBackdrop')) closeSettings(); });
+  window.addEventListener('online', function () { flushOfflineQueue(); flushPendingPhotos(); });
+  setInterval(function () { flushOfflineQueue(); }, 30000);
   window.addEventListener('resize', function () {
     resize();
     if (presentationModel) requestAnimationFrame(renderPresentation);

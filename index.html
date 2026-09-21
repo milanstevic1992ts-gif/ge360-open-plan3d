@@ -115,6 +115,20 @@
           <button id="disconnectBridgeBtn" class="secondary hidden">DISCONNETTI</button>
         </div>
       </div>
+      <div class="laser-connect">
+        <div class="bridge-connect-head">
+          <div><b>Metro laser Bluetooth</b><small>Leica DISTO · Bosch GLM / PLR compatibili</small></div>
+          <span id="laserStatus" class="bridge-status">NON COLLEGATO</span>
+        </div>
+        <p>Collega il laser una volta. Quando una misura è aperta sullo schermo, premi il tasto del laser e GE360 inserisce automaticamente il valore.</p>
+        <button id="scanLaserBtn" class="laser-scan-btn">📡 CERCA METRO LASER</button>
+        <select id="laserDeviceSelect" class="laser-select hidden"></select>
+        <div class="bridge-mini-actions">
+          <button id="connectLaserBtn" class="secondary hidden">COLLEGA</button>
+          <button id="disconnectLaserBtn" class="secondary hidden">DISCONNETTI</button>
+        </div>
+        <div id="laserLastMeasurement" class="bridge-meta hidden"></div>
+      </div>
       <div class="settings-divider"><span>oppure configurazione manuale</span></div>
       <label>Indirizzo server<input id="serverUrl" placeholder="http://10.88.0.1:9888/api/v1"></label>
       <label>API Key<input id="apiKey" type="password" placeholder="Incolla la chiave API"></label>
@@ -262,6 +276,12 @@
         <div id="noteClarifications" class="note-clarifications"></div>
       </div>
 
+      <div class="note-photo-tools">
+        <button id="addPhotoBtn" class="secondary">📷 AGGIUNGI FOTO</button>
+        <span id="notePhotoCount">Nessuna foto</span>
+      </div>
+      <div id="notePhotos" class="note-photos"></div>
+      <input id="photoInput" class="hidden" type="file" accept="image/jpeg,image/png,image/webp" capture="environment">
       <div class="note-actions">
         <button id="saveRawNoteBtn" class="secondary">SALVA GREZZO</button>
         <button id="rewriteNoteBtn" class="primary">✨ SISTEMA CON IA</button>
