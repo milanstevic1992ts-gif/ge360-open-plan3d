@@ -33,6 +33,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   var currentStroke = null;
   var activePointerId = null;
   var selectedWallId = null;
+  var selectedEntity = null;
+  var selectionDrag = null;
   var currentOpeningId = null;
   var sheetType = null;
   var numberText = '';
@@ -284,6 +286,9 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     history = [];
     currentStroke = null;
     selectedWallId = null;
+    selectedEntity = null;
+    selectionDrag = null;
+    $('selectionBar').classList.add('hidden');
     currentOpeningId = null;
     $('planName').value = plan.name || 'Rilievo';
     setMode('draw', false);
@@ -405,9 +410,39 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     });
   }
 
-  function checkpoint() {
-    history.push(JSON.stringify({ rawStrokes: rawStrokes, walls: walls, openings: openings, rooms: rooms, notes: notes, works: works, diagonals: diagonals, wallHeightM: wallHeightM }));
+  function geometrySnapshot() {
+    return JSON.stringify({
+      rawStrokes: rawStrokes,
+      walls: walls,
+      openings: openings,
+      rooms: rooms,
+      notes: notes,
+      works: works,
+      diagonals: diagonals,
+      wallHeightM: wallHeightM
+    });
+  }
+
+  function pushHistorySnapshot(snapshot) {
+    history.push(snapshot);
     if (history.length > 30) history.shift();
+  }
+
+  function restoreGeometrySnapshot(snapshot) {
+    var data = typeof snapshot === 'string' ? JSON.parse(snapshot) : snapshot;
+    rawStrokes = clone(data.rawStrokes || []);
+    walls = clone(data.walls || []);
+    openings = clone(data.openings || []);
+    rooms = clone(data.rooms || []);
+    notes = clone(data.notes || []);
+    works = clone(data.works || []);
+    diagonals = clone(data.diagonals || []);
+    wallHeightM = Number.isFinite(data.wallHeightM) ? data.wallHeightM : wallHeightM;
+    surfaceCache = null;
+  }
+
+  function checkpoint() {
+    pushHistorySnapshot(geometrySnapshot());
   }
 
   function undo() {
@@ -622,6 +657,249 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       if (h.distance <= 55 / viewZoom && (!best || h.distance < best.distance)) best = { wall: wall, distance: h.distance, t: h.t };
     });
     return best;
+  }
+
+  function selectionWallIds(entity) {
+    if (!entity) return [];
+    if (entity.type === 'wall') return entity.id ? [entity.id] : [];
+    return Array.isArray(entity.wallIds) ? entity.wallIds.slice() : [];
+  }
+
+  function faceForWallIds(wallIds) {
+    var key = faceKey({ wallIds: wallIds || [] });
+    if (!key) return null;
+    return buildFaces(walls).find(function (face) { return faceKey(face) === key; }) || null;
+  }
+
+  function selectableEntityAt(p) {
+    var wallHit = nearestWall(p);
+    if (wallHit && wallHit.distance <= 28 / viewZoom) {
+      return { type: 'wall', id: wallHit.wall.id, wallIds: [wallHit.wall.id], name: 'Muro' };
+    }
+
+    var face = findFaceAtPoint(walls, p);
+    if (!face) return null;
+    var room = faceRoom(face);
+    var wallIds = face.wallIds.slice().sort();
+    return {
+      type: 'room',
+      id: room ? room.id : null,
+      faceKey: faceKey(face),
+      wallIds: wallIds,
+      name: room ? (room.name || 'Ambiente') : 'Stanza'
+    };
+  }
+
+  function updateSelectionBar() {
+    var bar = $('selectionBar');
+    if (!selectedEntity || mode !== 'select') {
+      bar.classList.add('hidden');
+      return;
+    }
+    if (selectedEntity.type === 'wall') {
+      var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
+      var measure = wall && Number.isFinite(wall.lengthCm) ? ' · ' + metersText(wall.lengthCm) + ' m' : '';
+      $('selectionLabel').textContent = 'MURO' + measure;
+    } else {
+      var room = selectedEntity.id ? rooms.find(function (r) { return r.id === selectedEntity.id; }) : null;
+      $('selectionLabel').textContent = 'STANZA · ' + String(room ? room.name : (selectedEntity.name || 'Ambiente')).toUpperCase();
+    }
+    bar.classList.remove('hidden');
+  }
+
+  function clearSelection(announce) {
+    selectedEntity = null;
+    selectionDrag = null;
+    $('selectionBar').classList.add('hidden');
+    if (announce) toast('Selezione annullata');
+    render();
+  }
+
+  function beginSelectionPointer(p, pointerId) {
+    var hit = selectableEntityAt(p);
+    if (!hit) {
+      clearSelection(false);
+      toast('Tocca un muro o dentro una stanza');
+      return false;
+    }
+
+    selectedEntity = hit;
+    activePointerId = pointerId;
+    selectionDrag = {
+      pointerId: pointerId,
+      start: { x: p.x, y: p.y },
+      last: { x: p.x, y: p.y },
+      wallIds: selectionWallIds(hit),
+      beforeSnapshot: geometrySnapshot(),
+      moved: false,
+      checkpointed: false
+    };
+    updateSelectionBar();
+    render();
+    vibrate(10);
+    return true;
+  }
+
+  function translateWallSet(wallIds, dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (!dx && !dy)) return;
+    var selected = new Set(wallIds || []);
+    var joints = [];
+    var touched = new Set();
+
+    walls.forEach(function (wall) {
+      if (!selected.has(wall.id)) return;
+      joints.push({ x: wall.a.x, y: wall.a.y }, { x: wall.b.x, y: wall.b.y });
+    });
+
+    walls.forEach(function (wall) {
+      if (!selected.has(wall.id)) return;
+      wall.a.x += dx; wall.a.y += dy;
+      wall.b.x += dx; wall.b.y += dy;
+      touched.add(wall.id);
+    });
+
+    walls.forEach(function (wall) {
+      if (selected.has(wall.id)) return;
+      ['a', 'b'].forEach(function (end) {
+        var pt = wall[end];
+        var attached = joints.some(function (joint) {
+          return Math.abs(pt.x - joint.x) < 0.02 && Math.abs(pt.y - joint.y) < 0.02;
+        });
+        if (!attached) return;
+        pt.x += dx;
+        pt.y += dy;
+        touched.add(wall.id);
+      });
+    });
+
+    rawStrokes.forEach(function (stroke) {
+      if (!Array.isArray(stroke.wallIds)) return;
+      if (stroke.wallIds.some(function (id) { return touched.has(id); })) stroke.manualEdited = true;
+    });
+
+    surfaceCache = null;
+  }
+
+  function updateSelectionDrag(p, pointerId) {
+    if (!selectionDrag || selectionDrag.pointerId !== pointerId) return false;
+    var threshold = 4 / viewZoom;
+    if (!selectionDrag.moved && dist(selectionDrag.start, p) < threshold) return true;
+
+    if (!selectionDrag.checkpointed) {
+      pushHistorySnapshot(selectionDrag.beforeSnapshot);
+      selectionDrag.checkpointed = true;
+    }
+    selectionDrag.moved = true;
+    var from = selectionDrag.last;
+    translateWallSet(selectionDrag.wallIds, p.x - from.x, p.y - from.y);
+    selectionDrag.last = { x: p.x, y: p.y };
+    render();
+    return true;
+  }
+
+  function finishSelectionDrag(pointerId) {
+    if (!selectionDrag || selectionDrag.pointerId !== pointerId) return false;
+    var moved = selectionDrag.moved;
+    selectionDrag = null;
+    activePointerId = null;
+    if (moved) {
+      refreshSurfaceCache();
+      persistActive();
+      updateUI();
+      updateSelectionBar();
+      render();
+      vibrate(16);
+      toast('Elemento spostato ✓');
+    }
+    return true;
+  }
+
+  function cancelSelectionDragForNavigation() {
+    if (!selectionDrag) return;
+    if (selectionDrag.moved) {
+      restoreGeometrySnapshot(selectionDrag.beforeSnapshot);
+      if (selectionDrag.checkpointed && history.length && history[history.length - 1] === selectionDrag.beforeSnapshot) history.pop();
+    }
+    selectionDrag = null;
+    activePointerId = null;
+    updateSelectionBar();
+  }
+
+  function deleteSelectedEntity() {
+    if (!selectedEntity) return;
+    var entity = clone(selectedEntity);
+    var isRoom = entity.type === 'room';
+    var question = isRoom
+      ? 'Eliminare questa stanza? I muri esclusivi della stanza verranno eliminati.'
+      : 'Eliminare questo muro? Verranno eliminate anche porte e finestre presenti sul muro.';
+    if (!confirm(question)) return;
+
+    checkpoint();
+    var removeWallIds = new Set();
+    var deletedRoomIds = new Set();
+
+    if (entity.type === 'wall') {
+      removeWallIds.add(entity.id);
+      rooms.forEach(function (room) {
+        if (Array.isArray(room.wallIds) && room.wallIds.indexOf(entity.id) !== -1) deletedRoomIds.add(room.id);
+      });
+    } else {
+      if (entity.id) deletedRoomIds.add(entity.id);
+      var otherRooms = rooms.filter(function (room) { return !entity.id || room.id !== entity.id; });
+      (entity.wallIds || []).forEach(function (wallId) {
+        var shared = otherRooms.some(function (room) {
+          return Array.isArray(room.wallIds) && room.wallIds.indexOf(wallId) !== -1;
+        });
+        if (!shared) removeWallIds.add(wallId);
+      });
+    }
+
+    rooms.forEach(function (room) {
+      if (Array.isArray(room.wallIds) && room.wallIds.some(function (id) { return removeWallIds.has(id); })) {
+        deletedRoomIds.add(room.id);
+      }
+    });
+
+    var deletedOpeningIds = new Set(
+      openings.filter(function (opening) { return removeWallIds.has(opening.wallId); })
+        .map(function (opening) { return opening.id; })
+    );
+
+    walls = walls.filter(function (wall) { return !removeWallIds.has(wall.id); });
+    openings = openings.filter(function (opening) { return !deletedOpeningIds.has(opening.id); });
+    rooms = rooms.filter(function (room) { return !deletedRoomIds.has(room.id); });
+    diagonals = diagonals.filter(function (diagonal) {
+      return !(diagonal.a && removeWallIds.has(diagonal.a.wallId)) &&
+        !(diagonal.b && removeWallIds.has(diagonal.b.wallId));
+    });
+    notes = notes.filter(function (note) {
+      if (note.targetType === 'wall' && removeWallIds.has(note.targetId)) return false;
+      if (note.targetType === 'opening' && deletedOpeningIds.has(note.targetId)) return false;
+      if (['room', 'floor', 'ceiling'].indexOf(note.targetType) !== -1) {
+        if (deletedRoomIds.has(note.targetId)) return false;
+        if (entity.faceKey && note.targetId === entity.faceKey) return false;
+      }
+      return true;
+    });
+    works = works.filter(function (work) {
+      return !(work.targetType === 'room' && deletedRoomIds.has(work.targetId));
+    });
+    rawStrokes = rawStrokes.filter(function (stroke) {
+      return !(Array.isArray(stroke.wallIds) && stroke.wallIds.some(function (id) { return removeWallIds.has(id); }));
+    });
+
+    if (selectedWallId && removeWallIds.has(selectedWallId)) selectedWallId = null;
+    currentOpeningId = null;
+    selectedEntity = null;
+    selectionDrag = null;
+    $('selectionBar').classList.add('hidden');
+    surfaceCache = null;
+    refreshSurfaceCache();
+    persistActive();
+    updateUI();
+    render();
+    vibrate(25);
+    toast(isRoom ? 'Stanza eliminata' : 'Muro eliminato');
   }
 
   function openingWorldPoint(opening, wallOverride) {
@@ -1138,21 +1416,25 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
 
   function setMode(next, announce) {
     cancelPickModes();
+    if (next !== 'select') clearSelection(false);
     mode = next;
-    [['drawBtn', 'draw'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure'], ['quoteBtn', 'quote']].forEach(function (pair) {
+    [['drawBtn', 'draw'], ['selectBtn', 'select'], ['doorBtn', 'door'], ['windowBtn', 'window'], ['measureBtn', 'measure'], ['quoteBtn', 'quote']].forEach(function (pair) {
       $(pair[0]).classList.toggle('active', pair[1] === mode);
     });
     quoteFirst = null;
+    updateSelectionBar();
     if (announce !== false) {
       var msg = next === 'draw'
         ? 'Disegna col dito'
-        : next === 'door'
-          ? 'Tocca un muro o una porta esistente'
-          : next === 'window'
-            ? 'Tocca un muro o una finestra esistente'
-            : next === 'quote'
-              ? 'Tocca il primo angolo (o una quota esistente)'
-              : 'Tocca il muro da modificare';
+        : next === 'select'
+          ? 'Tocca una stanza o un muro; trascina per spostare'
+          : next === 'door'
+            ? 'Tocca un muro o una porta esistente'
+            : next === 'window'
+              ? 'Tocca un muro o una finestra esistente'
+              : next === 'quote'
+                ? 'Tocca il primo angolo (o una quota esistente)'
+                : 'Tocca il muro da modificare';
       toast(msg);
     }
   }
@@ -1906,6 +2188,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   function openRectRoomModal() {
     closeTools();
     cancelPickModes();
+    clearSelection(false);
     $('rectRoomBackdrop').classList.remove('hidden');
     setTimeout(function () { $('rectRoomWidth').focus(); }, 60);
   }
@@ -2358,6 +2641,27 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       ctx.fill();
       ctx.restore();
     });
+  }
+
+  function drawSelectionOverlay() {
+    if (mode !== 'select' || !selectedEntity || selectedEntity.type !== 'room') return;
+    var face = faceForWallIds(selectedEntity.wallIds);
+    if (!face || !face.polygon || face.polygon.length < 3) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(37,99,235,.14)';
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([10, 6]);
+    ctx.beginPath();
+    face.polygon.forEach(function (p, i) {
+      var sp = worldToScreen(p);
+      if (i === 0) ctx.moveTo(sp.x, sp.y); else ctx.lineTo(sp.x, sp.y);
+    });
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 
   function drawRoomLabels() {
@@ -4051,11 +4355,14 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     ctx.fillRect(0, 0, w, h);
 
     drawRoomAreas();
-    rawStrokes.forEach(function (s) { drawPolyline(s.raw, '#cbd5e1', 3); });
+    drawSelectionOverlay();
+    rawStrokes.forEach(function (s) { if (!s.manualEdited) drawPolyline(s.raw, '#cbd5e1', 3); });
     walls.forEach(function (wall) {
       ctx.save();
-      ctx.strokeStyle = wall.id === selectedWallId ? '#2563eb' : '#0f172a';
-      ctx.lineWidth = wall.id === selectedWallId ? 10 : 8;
+      var selectionWall = mode === 'select' && selectedEntity && selectedEntity.type === 'wall' && selectedEntity.id === wall.id;
+      var wallHighlighted = wall.id === selectedWallId || selectionWall;
+      ctx.strokeStyle = wallHighlighted ? '#2563eb' : '#0f172a';
+      ctx.lineWidth = wallHighlighted ? 10 : 8;
       ctx.lineCap = 'round';
       var sa = worldToScreen(wall.a);
       var sb = worldToScreen(wall.b);
@@ -4103,6 +4410,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
 
     // The second finger changes the gesture from editing to navigation.
     // Drop only transient edits: nothing is added to history or the plan.
+    cancelSelectionDragForNavigation();
     currentStroke = null;
     activePointerId = null;
     if (roomPlacementMode && roomDraft && roomDraft.dragging) {
@@ -4154,7 +4462,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       if (!hitWall) return toast('Tocca più vicino a un muro');
       return editWallMeasurement(hitWall.wall);
     }
-    if (mode !== 'draw') return placeOpening(p);
+    if (mode !== 'draw' && mode !== 'select') return placeOpening(p);
   }
 
   canvas.addEventListener('pointerdown', function (e) {
@@ -4180,6 +4488,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
         roomDraft.dragging = true;
         return;
       }
+      if (mode === 'select') {
+        beginSelectionPointer(touchPoint, e.pointerId);
+        return;
+      }
       if (mode === 'draw' && !roomPickMode && !notePickMode) {
         currentStroke = [touchPoint];
         $('emptyHint').classList.add('hidden');
@@ -4197,6 +4509,12 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       roomDraft.center = p;
       if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
       render();
+      return;
+    }
+    if (mode === 'select') {
+      activePointerId = e.pointerId;
+      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+      beginSelectionPointer(p, e.pointerId);
       return;
     }
     if (roomPickMode) {
@@ -4228,6 +4546,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
         return;
       }
       if (blockTouchUntilRelease) return;
+      if (mode === 'select' && selectionDrag && e.pointerId === selectionDrag.pointerId) {
+        updateSelectionDrag(point(e), e.pointerId);
+        return;
+      }
       if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
         roomDraft.center = point(e);
         render();
@@ -4242,6 +4564,11 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     }
 
     if (e.isPrimary === false) return;
+    if (mode === 'select' && selectionDrag && e.pointerId === selectionDrag.pointerId) {
+      e.preventDefault();
+      updateSelectionDrag(point(e), e.pointerId);
+      return;
+    }
     if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
       e.preventDefault();
       roomDraft.center = point(e);
@@ -4269,6 +4596,11 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       touchPointers.delete(e.pointerId);
       firstTouchRoomCenter = null;
 
+      if (mode === 'select' && selectionDrag && e.pointerId === selectionDrag.pointerId) {
+        finishSelectionDrag(e.pointerId);
+        return;
+      }
+
       if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
         roomDraft.center = touchPoint;
         roomDraft.dragging = false;
@@ -4287,6 +4619,11 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     }
 
     if (e.isPrimary === false) return;
+    if (mode === 'select' && selectionDrag && e.pointerId === selectionDrag.pointerId) {
+      e.preventDefault();
+      finishSelectionDrag(e.pointerId);
+      return;
+    }
     if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
       e.preventDefault();
       var roomPoint = point(e);
@@ -4304,7 +4641,13 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
 
   canvas.addEventListener('pointercancel', function (e) {
     if (e.pointerType === 'touch') {
+      if (selectionDrag && e.pointerId === selectionDrag.pointerId) cancelSelectionDragForNavigation();
       finishTouchNavigation(e.pointerId);
+      return;
+    }
+    if (selectionDrag && e.pointerId === selectionDrag.pointerId) {
+      cancelSelectionDragForNavigation();
+      render();
       return;
     }
     if (e.pointerId !== activePointerId) return;
@@ -4333,6 +4676,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   $('disconnectLaserBtn').addEventListener('click', disconnectLaser);
   $('backBtn').addEventListener('click', function () { persistActive(); showDashboard(); });
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
+  $('selectBtn').addEventListener('click', function () { setMode('select'); });
+  $('createRoomBtn').addEventListener('click', openRectRoomModal);
+  $('deleteSelectedBtn').addEventListener('click', deleteSelectedEntity);
+  $('closeSelectionBtn').addEventListener('click', function () { clearSelection(true); });
   $('doorBtn').addEventListener('click', function () { setMode('door'); });
   $('windowBtn').addEventListener('click', function () { setMode('window'); });
   $('measureBtn').addEventListener('click', startMeasureMode);
