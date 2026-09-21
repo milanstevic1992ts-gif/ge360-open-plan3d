@@ -457,6 +457,52 @@
       <div id="resultVersionsList" class="version-history-list"></div>
     </section>
   </div>
+  <div id="pdfArchiveBackdrop" class="modal-backdrop hidden">
+    <section class="pdf-archive-card">
+      <div class="settings-head">
+        <div>
+          <div class="eyebrow dark">DOCUMENTI RILIEVO</div>
+          <h2 id="pdfArchiveTitle">Archivio PDF</h2>
+        </div>
+        <button id="closePdfArchiveBtn" class="round-btn light" aria-label="Chiudi archivio PDF">✕</button>
+      </div>
+      <p class="pdf-archive-help">Qui trovi i PDF delle varie elaborazioni. Ogni ricalcolo resta collegato alla propria versione.</p>
+      <div id="pdfArchiveStatus" class="pdf-archive-status hidden"></div>
+      <div id="pdfArchiveList" class="pdf-archive-list"></div>
+    </section>
+  </div>
+
+  <div id="pdfReaderBackdrop" class="presentation-backdrop hidden">
+    <section class="pdf-reader-sheet">
+      <header class="pdf-reader-head">
+        <div class="pdf-reader-title">
+          <div class="eyebrow dark">LETTORE PDF</div>
+          <h2 id="pdfReaderTitle">Report</h2>
+          <div id="pdfReaderMeta" class="presentation-stamp"></div>
+        </div>
+        <button id="closePdfReaderBtn" class="round-btn light" aria-label="Chiudi PDF">✕</button>
+      </header>
+      <div id="pdfReaderLoading" class="pdf-reader-loading hidden"><div class="spinner"></div><span>Carico PDF…</span></div>
+      <div id="pdfReaderError" class="pdf-reader-error hidden"></div>
+      <div id="pdfReaderViewport" class="pdf-reader-viewport">
+        <canvas id="pdfReaderCanvas"></canvas>
+        <iframe id="pdfReaderFallback" class="pdf-reader-fallback hidden" title="Anteprima PDF"></iframe>
+      </div>
+      <div class="pdf-reader-controls">
+        <button id="pdfPrevBtn" aria-label="Pagina precedente">‹</button>
+        <span id="pdfPageLabel">1 / 1</span>
+        <button id="pdfNextBtn" aria-label="Pagina successiva">›</button>
+        <button id="pdfZoomOutBtn" aria-label="Riduci zoom">−</button>
+        <span id="pdfZoomLabel">100%</span>
+        <button id="pdfZoomInBtn" aria-label="Aumenta zoom">＋</button>
+      </div>
+      <div class="pdf-reader-actions">
+        <button id="pdfBackArchiveBtn" class="secondary">← ARCHIVIO PDF</button>
+        <button id="pdfSaveBtn" class="primary">SALVA / CONDIVIDI</button>
+      </div>
+    </section>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
   <script type="module" src="js/app.js"></script>
 </body>
