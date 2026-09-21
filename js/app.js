@@ -5,7 +5,7 @@ import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './bac
 import { rectRoomGeometry, snapRectRoomCenter } from './room-template.js';
 import { buildPlanPayload, payloadFingerprint, measuredWallCount, roomTypeFromName, DEFAULT_WALL_THICKNESS_CM } from './plan-payload.js';
 import { createBackendClient } from './backend-client.js';
-import { compactResult, humanizeText, questionAction, isResultStale, statusInfo, qualityLabel, fmtNum, drawBackendPlan } from './backend-results.js';
+import { compactResult, humanizeText, questionAction, isResultStale, statusInfo, qualityLabel, fmtNum, drawBackendPlan, decisionWalls, fmtRange, confidenceLabel, isAgentCorrected } from './backend-results.js';
 import { createOfflineQueue, isRetryableBackendError } from './offline-queue.js';
 import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetKey } from './photo-store.js';
 import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDevice, restoreLaserDevice, listenLaser } from './laser-client.js';
@@ -82,6 +82,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   var openingQuickIsNew = false;
   var openingQuickOriginal = null;
   var openingCustomFlow = false;
+  var resultHighlightWallIds = [];
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -3044,7 +3045,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       info.classList.add('warn');
       info.textContent = 'Serve almeno un muro misurato.';
     } else if (measured < total) {
-      info.textContent = (total - measured) + ' muri su ' + total + ' senza misura: il server li calcola dalle altre misure quando è possibile e ti dice quali mancano davvero.';
+      info.textContent = (total - measured) + ' muri su ' + total + ' senza misura: l\u2019agente li ricava dalle altre misure o li stima, e ti dice con quale affidabilità.';
     } else {
       info.textContent = 'Tutte le ' + total + ' misure inserite' + (diagonals.length ? ' · ' + diagonals.length + ' quote di controllo' : '') + '.';
     }
@@ -3264,6 +3265,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var planWalls = plan.walls || [];
     resultPlanId = id;
     resultHighlightWallId = null;
+    resultHighlightWallIds = [];
     var st = statusInfo(res.status);
     $('resultTitle').textContent = plan.name || 'Rilievo';
     $('resultStamp').textContent = st.label + (res.version ? ' · versione ' + res.version : '') + ' · ' + new Date(res.receivedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -3282,6 +3284,30 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
 
     var qWrap = $('resultQuestions');
     qWrap.innerHTML = '';
+    // Decisioni prese in autonomia dall'agente: si leggono, non serve rispondere.
+    var decisions = res.decisions && res.decisions.length ? res.decisions : null;
+    var decisionTexts = (res.totals && res.totals.decisions) || [];
+    if (decisions || decisionTexts.length) {
+      var head = document.createElement('div');
+      head.className = 'result-decisions-head';
+      head.textContent = 'DECISIONI DELL\u2019AGENTE · ' + (decisions ? decisions.length : decisionTexts.length);
+      qWrap.appendChild(head);
+    }
+    (decisions || decisionTexts.map(function (t) { return { text: t }; })).forEach(function (d) {
+      var btn = document.createElement('button');
+      var ids = decisionWalls(d, planWalls);
+      btn.className = 'result-decision' + (ids.length ? ' actionable' : '');
+      var txt = humanizeText(d.text, planWalls);
+      if (Number.isFinite(d.probability) && d.probability >= 0 && d.probability <= 1 && txt.indexOf('probabilità') === -1) txt += ' — probabilità ' + Math.round(d.probability * 100) + '%';
+      btn.textContent = txt;
+      btn.addEventListener('click', function () {
+        resultHighlightWallIds = ids;
+        renderResultCanvas();
+        var rc = $('resultCanvas');
+        if (rc && typeof rc.scrollIntoView === 'function') rc.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      qWrap.appendChild(btn);
+    });
     ((res.totals && res.totals.questions) || []).forEach(function (q) {
       var action = questionAction(q, planWalls);
       var btn = document.createElement('button');
@@ -3294,7 +3320,19 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var t = res.totals || {};
     var totals = $('resultTotals');
     totals.innerHTML = '';
-    totals.appendChild(resultCard('PAVIMENTO', t.floorAreaM2, 'm²'));
+    var floorCard = resultCard('PAVIMENTO', t.floorAreaM2, 'm²');
+    if (fmtRange(t.floorAreaRangeM2)) {
+      var rng = document.createElement('div');
+      rng.className = 'ps-range';
+      rng.textContent = fmtRange(t.floorAreaRangeM2) + ' m²';
+      floorCard.appendChild(rng);
+    }
+    totals.appendChild(floorCard);
+    if (Number.isFinite(t.confidence)) {
+      var conf = resultCard('AFFIDABILITÀ', t.confidence * 100, '%', 0);
+      conf.querySelector('.ps-v').textContent = Math.round(t.confidence * 100) + '% · ' + confidenceLabel(t.confidence);
+      totals.appendChild(conf);
+    }
     totals.appendChild(resultCard('SOFFITTO', t.ceilingAreaM2, 'm²'));
     totals.appendChild(resultCard('PARETI NETTE', t.netWallAreaM2, 'm²'));
     totals.appendChild(resultCard('PARETI LORDE', t.grossWallAreaM2, 'm²'));
@@ -3318,10 +3356,16 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       var sub = document.createElement('div');
       sub.className = 'rr-sub';
       sub.textContent = fmtNum(room.widthM, 2) + ' × ' + fmtNum(room.depthM, 2) + ' m · h ' + fmtNum(room.heightMm / 1000, 2) + ' m' +
-        (Number.isFinite(room.confidence) ? ' · affidabilità ' + Math.round(room.confidence * 100) + '%' : '');
+        (Number.isFinite(room.confidence) ? ' · affidabilità ' + Math.round(room.confidence * 100) + '% (' + confidenceLabel(room.confidence) + ')' : '');
       var grid = document.createElement('div');
       grid.className = 'result-room-grid';
-      grid.appendChild(cell('Pavimento', room.floorAreaM2, 'm²'));
+      var floorCell = cell('Pavimento', room.floorAreaM2, 'm²');
+      if (fmtRange(room.floorAreaRangeM2)) {
+        var small = document.createElement('small');
+        small.textContent = fmtRange(room.floorAreaRangeM2) + ' m²';
+        floorCell.appendChild(small);
+      }
+      grid.appendChild(floorCell);
       grid.appendChild(cell('Soffitto', room.ceilingAreaM2, 'm²'));
       grid.appendChild(cell('Pareti nette', room.netWallAreaM2, 'm²'));
       grid.appendChild(cell('Pareti lorde', room.grossWallAreaM2, 'm²'));
@@ -3335,6 +3379,12 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       card.appendChild(h3);
       card.appendChild(sub);
       card.appendChild(grid);
+      (room.decisions || []).forEach(function (text) {
+        var dq = document.createElement('div');
+        dq.className = 'rr-q';
+        dq.textContent = '• ' + humanizeText(text, planWalls);
+        card.appendChild(dq);
+      });
       roomsWrap.appendChild(card);
     });
 
@@ -3343,7 +3393,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       var idx = planWalls.findIndex(function (x) { return x.id === w.id; });
       var label = 'Muro ' + (idx + 1);
       if (w.suspect && w.suggestedLengthMm) {
-        wallInfo.push('⚠ ' + label + ': misurato ' + fmtNum(w.declaredLengthMm / 1000, 3) + ' m, dal resto risulta ' + fmtNum(w.suggestedLengthMm / 1000, 3) + ' m');
+        wallInfo.push((isAgentCorrected(w, res.decisions) ? '✎ ' : '⚠ ') + label + ': misurato ' + fmtNum(w.declaredLengthMm / 1000, 3) + ' m, ' + (isAgentCorrected(w, res.decisions) ? 'usato ' + fmtNum(w.calculatedLengthMm / 1000, 3) + ' m (corretto dall’agente)' : 'suggerito ' + fmtNum(w.suggestedLengthMm / 1000, 3) + ' m (da verificare)'));
       } else if (w.lengthSource === 'CALCULATED') {
         wallInfo.push('✓ ' + label + ': calcolato ' + fmtNum(w.calculatedLengthMm / 1000, 3) + ' m dalle altre misure');
       } else if (w.lengthSource === 'SKETCH') {
@@ -3361,7 +3411,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var plan = resultPlan();
     if (!plan || !plan.backend || !plan.backend.result) return;
     var res = resultOverride || plan.backend.result;
-    drawBackendPlan($('resultCanvas'), res, { dpr: Math.min(3, window.devicePixelRatio || 1), highlightWallId: resultHighlightWallId });
+    drawBackendPlan($('resultCanvas'), res, { dpr: Math.min(3, window.devicePixelRatio || 1), highlightWallId: resultHighlightWallId, highlightWallIds: resultHighlightWallIds });
   }
 
   function closeResult() {

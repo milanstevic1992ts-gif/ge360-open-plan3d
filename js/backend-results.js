@@ -31,6 +31,11 @@ export function compactResult(status, processed, meta = {}) {
       suggestedLengthMm: w.suggestedLengthMm ?? null,
       withinTolerance: w.withinTolerance !== false
     })),
+    decisions: ((p.metadata && p.metadata.decisions) || []).map(d => ({
+      id: d.id, kind: d.kind, text: d.text, probability: d.probability ?? null,
+      wallId: d.wallId || null, wallIds: d.wallIds || [],
+      declaredMm: d.declaredMm ?? null, usedMm: d.usedMm ?? null
+    })),
     openings: (p.openings || []).map(o => ({
       id: o.id, type: o.type, wallId: o.wallId,
       center: { x: r(o.center.x), y: r(o.center.y) },
@@ -47,6 +52,8 @@ export function compactResult(status, processed, meta = {}) {
       openingsAreaM2: room.openingsAreaM2, revealsAreaM2: room.revealsAreaM2,
       tilingHeightMm: room.tilingHeightMm ?? null, tilingAreaM2: room.tilingAreaM2 ?? null,
       paintAreaM2: room.paintAreaM2,
+      floorAreaRangeM2: room.floorAreaRangeM2 || null,
+      decisions: room.decisions || [],
       openings: (room.openings || []).map(o => ({ id: o.id, type: o.type, widthMm: o.widthMm, heightMm: o.heightMm })),
       questions: room.questions || []
     }))
@@ -65,7 +72,38 @@ export function humanizeText(text, walls) {
 
 const WALL_RE = /\b[Pp]aret[ei] ([A-Za-z0-9_-]+)/;
 
-/** Cosa fare quando l'utente tocca una domanda. */
+/** Muri citati in una decisione (per evidenziarli sulla pianta). */
+export function decisionWalls(decision, walls) {
+  const ids = new Set((walls || []).map(w => w.id));
+  const out = [];
+  if (decision && decision.wallId && ids.has(decision.wallId)) out.push(decision.wallId);
+  ((decision && decision.wallIds) || []).forEach(id => { if (ids.has(id) && !out.includes(id)) out.push(id); });
+  if (!out.length && decision && decision.text) {
+    const mentioned = new Set(String(decision.text).match(/[A-Za-z0-9_-]+/g) || []);
+    for (const id of ids) if (id && mentioned.has(id)) out.push(id);
+  }
+  return out;
+}
+
+export function isAgentCorrected(wall, decisions = []) {
+  return decisions.some(d => (d.wallId === wall.id || (d.wallIds || []).includes(wall.id)) &&
+    Number.isFinite(d.usedMm) && Number.isFinite(wall.calculatedLengthMm) &&
+    Math.abs(d.usedMm - wall.calculatedLengthMm) <= 0.1);
+}
+
+export function fmtRange(range, digits = 2) {
+  if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isFinite) || range[0] < 0 || range[0] > range[1]) return '';
+  return fmtNum(range[0], digits) + '–' + fmtNum(range[1], digits);
+}
+
+export function confidenceLabel(c) {
+  if (!Number.isFinite(c)) return '';
+  if (c >= 0.85) return 'alta';
+  if (c >= 0.6) return 'media';
+  return 'bassa';
+}
+
+/** Cosa fare quando l'utente tocca una domanda (risultati salvati prima dell'agente autonomo). */
 export function questionAction(question, walls) {
   const text = String(question || '');
   const ids = new Set((walls || []).map(w => w.id));
@@ -102,7 +140,8 @@ export function fmtNum(v, digits = 2, unit = '') {
 }
 
 /** Disegna la pianta calcolata dal backend (coordinate in mm). */
-export function drawBackendPlan(canvas, result, { dpr = 1, highlightWallId = null } = {}) {
+export function drawBackendPlan(canvas, result, { dpr = 1, highlightWallId = null, highlightWallIds = null } = {}) {
+  const highlighted = new Set([...(highlightWallIds || []), ...(highlightWallId ? [highlightWallId] : [])]);
   if (!canvas || !result) return;
   const ctx = canvas.getContext('2d');
   const rect = canvas.getBoundingClientRect();
@@ -140,8 +179,10 @@ export function drawBackendPlan(canvas, result, { dpr = 1, highlightWallId = nul
     ctx.save();
     ctx.lineCap = 'square';
     ctx.lineWidth = Math.max(3, (w.thicknessMm || 120) * s);
-    ctx.strokeStyle = w.id === highlightWallId ? '#2563eb'
-      : w.suspect || !w.withinTolerance ? '#dc2626'
+    ctx.strokeStyle = highlighted.has(w.id) ? '#2563eb'
+      : isAgentCorrected(w, result.decisions) ? '#ea580c'
+        : w.suspect ? '#dc2626'
+        : !w.withinTolerance ? '#dc2626'
         : w.lengthSource === 'SKETCH' ? '#f59e0b'
           : w.lengthSource === 'CALCULATED' ? '#7c3aed' : '#0f172a';
     if (w.lengthSource !== 'MEASURED') ctx.setLineDash([8, 5]);
@@ -185,4 +226,3 @@ export function drawBackendPlan(canvas, result, { dpr = 1, highlightWallId = nul
     ctx.fillText(fmtNum(room.floorAreaM2, 2, 'm²'), q.x, q.y + 8);
   });
 }
-

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { buildPlanPayload, payloadFingerprint, measuredWallCount, roomTypeFromName, safePlanId } from '../js/plan-payload.js';
 import { createBackendClient, BackendError } from '../js/backend-client.js';
-import { compactResult, humanizeText, questionAction, isResultStale, statusInfo } from '../js/backend-results.js';
+import { compactResult, humanizeText, questionAction, isResultStale, statusInfo, decisionWalls, fmtRange, confidenceLabel, drawBackendPlan, isAgentCorrected } from '../js/backend-results.js';
 
 // ---------------------------------------------------------------- payload
 const plan = {
@@ -62,6 +62,7 @@ function fakeServer(routes) {
 }
 
 let polls = 0;
+const processedDecisions = [{ id: 'd1', kind: 'typo', text: 'Parete w-2: misurata 350,0 cm, trattata come 305,0 cm (cifre invertite)', probability: 0.96, wallId: 'w-2', declaredMm: 3500, usedMm: 3050 }];
 const processed = {
   walls: [{ id: 'w-1', start: { x: 0, y: 0 }, end: { x: 2005, y: 0 }, thicknessMm: 100, declaredLengthMm: 2005, calculatedLengthMm: 2005, lengthSource: 'MEASURED', measured: true, withinTolerance: true },
           { id: 'w-3', start: { x: 2005, y: 2500 }, end: { x: 0, y: 2500 }, thicknessMm: 100, declaredLengthMm: 2005, calculatedLengthMm: 2005, lengthSource: 'CALCULATED', measured: false, withinTolerance: true }],
@@ -70,8 +71,10 @@ const processed = {
             quality: 'OK', confidence: 1, floorAreaM2: 5.0125, ceilingAreaM2: 5.0125, perimeterM: 9.01, heightMm: 2500, volumeM3: 12.53,
             widthM: 2.005, depthM: 2.5, skirtingM: 8.21, grossWallAreaM2: 22.5, netWallAreaM2: 20.8, openingsAreaM2: 1.7, revealsAreaM2: 0.5,
             tilingHeightMm: 2200, tilingAreaM2: 18, paintAreaM2: 12, openings: [], questions: [] }],
-  metadata: { ai: null }
+  metadata: { ai: null, decisions: processedDecisions }
 };
+processed.rooms[0].floorAreaRangeM2 = [4.98, 5.05];
+processed.rooms[0].decisions = ['Parete w-2: misurata 350,0 cm, trattata come 305,0 cm (cifre invertite) — probabilità 96%'];
 const server = fakeServer({
   'POST /plans/refine': () => ({ body: { ok: true, planId: payload.planId, jobId: 'job-1', status: 'QUEUED' } }),
   'GET /jobs/job-1': () => ({ body: { jobId: 'job-1', status: ++polls < 2 ? 'PROCESSING' : 'DONE' } }),
@@ -133,5 +136,34 @@ assert.deepEqual(questionAction('Camera: Posizione del tramezzo w-2 lungo la par
 assert.deepEqual(questionAction('La finestra è sopra la vasca?', plan.walls), { type: 'info' });
 assert.equal(statusInfo('NEEDS_REVIEW').label, 'DA VERIFICARE');
 
+// agente autonomo: decisioni, intervalli, affidabilità
+assert.equal(compact.decisions.length, 1);
+assert.equal(compact.decisions[0].probability, 0.96);
+assert.deepEqual(decisionWalls(compact.decisions[0], plan.walls), ['w-2']);
+assert.deepEqual(compact.rooms[0].floorAreaRangeM2, [4.98, 5.05]);
+assert.equal(fmtRange(compact.rooms[0].floorAreaRangeM2), '4,98–5,05');
+assert.equal(humanizeText(compact.rooms[0].decisions[0], plan.walls).startsWith('Parete muro 2'), true);
+assert.equal(confidenceLabel(0.9), 'alta');
+assert.equal(confidenceLabel(0.4), 'bassa');
+
 console.log('backend client / payload / result tests OK');
 
+// Regressioni: id simili, vecchi risultati e selezione singola/multipla.
+assert.deepEqual(decisionWalls({text: 'Parete w-20: corretta'}, [{id:'w-2'}, {id:'w-20'}]), ['w-20']);
+assert.equal(fmtRange([5, 4]), '');
+assert.equal(fmtRange([null, 5]), '');
+assert.equal(isAgentCorrected({id:'w-2', calculatedLengthMm:3050}, processedDecisions), true);
+assert.equal(isAgentCorrected({id:'w-2', calculatedLengthMm:3500}, processedDecisions), false);
+assert.equal(isAgentCorrected({id:'w-2', calculatedLengthMm:3050}), false);
+const strokes = [];
+const ctx = new Proxy({stroke() { strokes.push(this.strokeStyle); }}, {
+  get(target, key) { return key in target ? target[key] : () => {}; }
+});
+const canvas = {getContext: () => ctx, getBoundingClientRect: () => ({width:400, height:300})};
+const renderWalls = {walls: compact.walls, rooms:[], openings:[]};
+drawBackendPlan(canvas, renderWalls, {highlightWallId:'w-1', highlightWallIds:[]});
+assert.equal(strokes[0], '#2563eb');
+strokes.length = 0;
+drawBackendPlan(canvas, renderWalls, {highlightWallIds:['w-1','w-3']});
+assert.deepEqual(strokes, ['#2563eb', '#2563eb']);
+console.log('agent rendering regressions OK');

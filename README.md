@@ -42,7 +42,10 @@ e mostrano il risultato:
 - pianta ricostruita dal server (misurato / calcolato / stimato da schizzo / da verificare);
 - totali e, per ogni stanza, pavimento, soffitto, pareti nette e lorde, aperture, spallette,
   rivestimento, pittura, battiscopa, perimetro, volume;
-- domande del server: toccandole si apre il tastierino sul muro giusto o lo strumento QUOTA;
+- **decisioni dell'agente**: il frontend mostra le correzioni e le stime restituite dal backend
+  compatibile, con la loro probabilità; toccandole i muri interessati si evidenziano sulla pianta.
+  Restano disponibili le domande dei risultati precedenti e gli avvisi da verificare;
+- m² con **intervallo** (es. 7,50 m², 7,45–7,55) e **affidabilità** per stanza e totale;
 - download di PDF, DXF e PNG (condivisione Android tramite Filesystem/Share);
 - avviso "rilievo cambiato dopo il calcolo" con RICALCOLA.
 
