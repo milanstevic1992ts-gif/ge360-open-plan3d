@@ -41,6 +41,7 @@ jobs:
           node --check js/plan-payload.js
           node --check js/opening-presets.js
           node --check js/work-catalog.js
+          node --check js/pdf-reader.js
           node scripts/test-backend-bridge.mjs
           node scripts/test-backend-client.mjs
           node scripts/test-room-template.mjs
@@ -58,6 +59,9 @@ jobs:
           mkdir -p www
           cp index.html www/
           cp -r css js geometry-engine www/
+          mkdir -p www/vendor/pdfjs
+          cp node_modules/pdfjs-dist/legacy/build/pdf.mjs www/vendor/pdfjs/
+          cp node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs www/vendor/pdfjs/
           cat > capacitor.config.json <<'EOF'
           {
             "appId": "com.ge360.rilievo",
