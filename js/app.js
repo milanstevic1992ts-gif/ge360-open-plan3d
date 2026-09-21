@@ -3117,7 +3117,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
             status: compact.status,
             syncStatus: 'SYNCED',
             result: compact,
-            lastError: null
+            lastError: null,
+            reportDirty: false
           };
           offlineQueue.remove(item.planId);
           saveLibrary();
@@ -3241,7 +3242,12 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var st = statusInfo(res.status);
     $('resultTitle').textContent = plan.name || 'Rilievo';
     $('resultStamp').textContent = st.label + (res.version ? ' · versione ' + res.version : '') + ' · ' + new Date(res.receivedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    $('resultStale').classList.toggle('hidden', !isResultStale(res, payloadFingerprint(planPayload(plan))));
+    var geometryStale = isResultStale(res, payloadFingerprint(planPayload(plan)));
+    var reportDirty = !!(plan.backend && plan.backend.reportDirty);
+    $('resultStale').classList.toggle('hidden', !geometryStale && !reportDirty);
+    $('resultStale').firstChild.nodeValue = geometryStale
+      ? 'Il rilievo è cambiato dopo questo calcolo. '
+      : 'Hai aggiunto o modificato lavorazioni dopo l’ultimo PDF. ';
 
     var ai = res.totals && res.totals.aiSummary;
     $('resultAi').classList.toggle('hidden', !ai);
@@ -3377,6 +3383,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   async function downloadResult(kind) {
     var plan = resultPlan();
     if (!plan || !plan.backend) return;
+    if (kind === 'pdf' && plan.backend.reportDirty) {
+      toast('PDF da aggiornare: premi RICALCOLA per includere gli ultimi lavori');
+      return;
+    }
     if (!settings.serverUrl || !settings.apiKey) return toast('Server non collegato');
     toast('Scarico ' + kind.toUpperCase() + '…');
     try {
