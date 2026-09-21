@@ -133,7 +133,13 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
     if (!plan || !plan.backend || !plan.backend.result) return null;
     var result = plan.backend.result;
     try {
-      if (isResultStale(result, payloadFingerprint(planPayload(plan)))) return null;
+      // Do not call planPayload() here: planPayload includes summary(), while
+      // summary() itself asks for the authoritative result.
+      var fingerprintPayload = buildPlanPayload(
+        Object.assign({}, plan, { notes: plan.notes || [] }),
+        { summary: {} }
+      );
+      if (isResultStale(result, payloadFingerprint(fingerprintPayload))) return null;
     } catch (_) { return null; }
     return result;
   }
