@@ -40,6 +40,12 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   var dpr = 1;
   var viewZoom = 1;
   var viewRotation = 0;
+  var viewPanX = 0;
+  var viewPanY = 0;
+  var touchPointers = new Map();
+  var twoFingerPan = null;
+  var blockTouchUntilRelease = false;
+  var firstTouchRoomCenter = null;
   var MIN_ZOOM = 0.1;
   var MAX_ZOOM = 5;
   var solverMode = 'normal';
@@ -194,7 +200,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     plan.diagonals = clone(diagonals);
     plan.wallThicknessCm = wallThicknessCm;
     plan.wallReference = wallReference;
-    plan.view = { zoom: viewZoom, rotation: viewRotation };
+    plan.view = { zoom: viewZoom, rotation: viewRotation, panX: viewPanX, panY: viewPanY };
     plan.surfaceSummary = surfaceCache && surfaceCache.totals ? clone(surfaceCache.totals) : null;
     plan.summary = summary();
     saveLibrary();
@@ -236,7 +242,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       diagonals: [],
       wallThicknessCm: DEFAULT_WALL_THICKNESS_CM,
       wallReference: 'interior',
-      view: { zoom: 1, rotation: 0 }
+      view: { zoom: 1, rotation: 0, panX: 0, panY: 0 }
     };
     library.unshift(plan);
     saveLibrary();
@@ -269,6 +275,12 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     roomPickMode = false;
     viewZoom = plan.view && Number.isFinite(plan.view.zoom) ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, plan.view.zoom)) : 1;
     viewRotation = plan.view && Number.isFinite(plan.view.rotation) ? ((plan.view.rotation % 360) + 360) % 360 : 0;
+    viewPanX = plan.view && Number.isFinite(plan.view.panX) ? plan.view.panX : 0;
+    viewPanY = plan.view && Number.isFinite(plan.view.panY) ? plan.view.panY : 0;
+    touchPointers.clear();
+    twoFingerPan = null;
+    blockTouchUntilRelease = false;
+    firstTouchRoomCenter = null;
     history = [];
     currentStroke = null;
     selectedWallId = null;
@@ -429,15 +441,15 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var cos = Math.cos(rad);
     var sin = Math.sin(rad);
     return {
-      x: center.x + (dx * cos - dy * sin) * viewZoom,
-      y: center.y + (dx * sin + dy * cos) * viewZoom
+      x: center.x + viewPanX + (dx * cos - dy * sin) * viewZoom,
+      y: center.y + viewPanY + (dx * sin + dy * cos) * viewZoom
     };
   }
 
   function screenToWorld(p) {
     var center = viewCenter();
-    var dx = (p.x - center.x) / viewZoom;
-    var dy = (p.y - center.y) / viewZoom;
+    var dx = (p.x - center.x - viewPanX) / viewZoom;
+    var dy = (p.y - center.y - viewPanY) / viewZoom;
     var rad = viewRotation * Math.PI / 180;
     var cos = Math.cos(rad);
     var sin = Math.sin(rad);
@@ -475,6 +487,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   function resetView() {
     viewZoom = 1;
     viewRotation = 0;
+    viewPanX = 0;
+    viewPanY = 0;
     updateViewControls();
     persistActive();
     render();
@@ -1869,6 +1883,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     var bh = Math.max(1, b.maxY - b.minY);
     viewZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((canvas.clientWidth - 70) / bw, (canvas.clientHeight - 120) / bh)));
     viewRotation = 0;
+    viewPanX = 0;
+    viewPanY = 0;
     updateViewControls();
     refreshSurfaceCache();
     persistActive();
@@ -4067,7 +4083,111 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     render();
   }
 
+  function pointerScreenPoint(e) {
+    var rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  function touchCentroid() {
+    var points = Array.from(touchPointers.values());
+    if (points.length < 2) return null;
+    return {
+      x: (points[0].x + points[1].x) / 2,
+      y: (points[0].y + points[1].y) / 2
+    };
+  }
+
+  function beginTwoFingerPan() {
+    var center = touchCentroid();
+    if (!center) return false;
+
+    // The second finger changes the gesture from editing to navigation.
+    // Drop only transient edits: nothing is added to history or the plan.
+    currentStroke = null;
+    activePointerId = null;
+    if (roomPlacementMode && roomDraft && roomDraft.dragging) {
+      roomDraft.dragging = false;
+      if (firstTouchRoomCenter) roomDraft.center = clone(firstTouchRoomCenter);
+    }
+
+    twoFingerPan = { last: center };
+    render();
+    return true;
+  }
+
+  function updateTwoFingerPan() {
+    if (!twoFingerPan) return false;
+    var center = touchCentroid();
+    if (!center) return false;
+    viewPanX += center.x - twoFingerPan.last.x;
+    viewPanY += center.y - twoFingerPan.last.y;
+    twoFingerPan.last = center;
+    render();
+    return true;
+  }
+
+  function finishTouchNavigation(pointerId) {
+    touchPointers.delete(pointerId);
+    currentStroke = null;
+    activePointerId = null;
+    if (roomPlacementMode && roomDraft) roomDraft.dragging = false;
+
+    if (twoFingerPan) {
+      twoFingerPan = null;
+      blockTouchUntilRelease = touchPointers.size > 0;
+      persistActive();
+    }
+
+    if (!touchPointers.size) {
+      blockTouchUntilRelease = false;
+      firstTouchRoomCenter = null;
+    }
+    render();
+  }
+
+  function handleCanvasTap(p) {
+    if (roomPickMode) return handleRoomPick(p);
+    if (notePickMode) return handleNotePick(p);
+    if (mode === 'quote') return handleQuotePick(p);
+    if (mode === 'measure') {
+      var hitWall = nearestWall(p);
+      if (!hitWall) return toast('Tocca più vicino a un muro');
+      return editWallMeasurement(hitWall.wall);
+    }
+    if (mode !== 'draw') return placeOpening(p);
+  }
+
   canvas.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'touch') {
+      e.preventDefault();
+      touchPointers.set(e.pointerId, pointerScreenPoint(e));
+      if (canvas.setPointerCapture) {
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+
+      if (touchPointers.size === 1) {
+        firstTouchRoomCenter = roomPlacementMode && roomDraft && roomDraft.center ? clone(roomDraft.center) : null;
+      }
+      if (touchPointers.size >= 2) {
+        beginTwoFingerPan();
+        return;
+      }
+      if (blockTouchUntilRelease) return;
+
+      var touchPoint = point(e);
+      activePointerId = e.pointerId;
+      if (roomPlacementMode && roomDraft) {
+        roomDraft.dragging = true;
+        return;
+      }
+      if (mode === 'draw' && !roomPickMode && !notePickMode) {
+        currentStroke = [touchPoint];
+        $('emptyHint').classList.add('hidden');
+        render();
+      }
+      return;
+    }
+
     if (e.isPrimary === false) return;
     e.preventDefault();
     var p = point(e);
@@ -4093,18 +4213,34 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       currentStroke = [p];
       $('emptyHint').classList.add('hidden');
       render();
-    } else if (mode === 'quote') {
-      handleQuotePick(p);
-    } else if (mode === 'measure') {
-      var hitWall = nearestWall(p);
-      if (!hitWall) return toast('Tocca più vicino a un muro');
-      editWallMeasurement(hitWall.wall);
     } else {
-      placeOpening(p);
+      handleCanvasTap(p);
     }
   });
 
   canvas.addEventListener('pointermove', function (e) {
+    if (e.pointerType === 'touch') {
+      if (!touchPointers.has(e.pointerId)) return;
+      e.preventDefault();
+      touchPointers.set(e.pointerId, pointerScreenPoint(e));
+      if (twoFingerPan) {
+        updateTwoFingerPan();
+        return;
+      }
+      if (blockTouchUntilRelease) return;
+      if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
+        roomDraft.center = point(e);
+        render();
+        return;
+      }
+      if (mode !== 'draw' || currentStroke === null || e.pointerId !== activePointerId) return;
+      var touchPoint = point(e);
+      var touchLast = currentStroke[currentStroke.length - 1];
+      if (dist(touchLast, touchPoint) >= 3 / viewZoom) currentStroke.push(touchPoint);
+      render();
+      return;
+    }
+
     if (e.isPrimary === false) return;
     if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
       e.preventDefault();
@@ -4121,6 +4257,35 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   });
 
   canvas.addEventListener('pointerup', function (e) {
+    if (e.pointerType === 'touch') {
+      e.preventDefault();
+
+      if (twoFingerPan || blockTouchUntilRelease) {
+        finishTouchNavigation(e.pointerId);
+        return;
+      }
+
+      var touchPoint = point(e);
+      touchPointers.delete(e.pointerId);
+      firstTouchRoomCenter = null;
+
+      if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
+        roomDraft.center = touchPoint;
+        roomDraft.dragging = false;
+        commitRectRoom(touchPoint);
+        return;
+      }
+      if (mode === 'draw' && currentStroke !== null && e.pointerId === activePointerId) {
+        if (dist(currentStroke[currentStroke.length - 1], touchPoint) > 2 / viewZoom) currentStroke.push(touchPoint);
+        commitStroke();
+        return;
+      }
+
+      activePointerId = null;
+      handleCanvasTap(touchPoint);
+      return;
+    }
+
     if (e.isPrimary === false) return;
     if (roomPlacementMode && roomDraft && roomDraft.dragging && e.pointerId === activePointerId) {
       e.preventDefault();
@@ -4138,6 +4303,10 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   });
 
   canvas.addEventListener('pointercancel', function (e) {
+    if (e.pointerType === 'touch') {
+      finishTouchNavigation(e.pointerId);
+      return;
+    }
     if (e.pointerId !== activePointerId) return;
     if (roomPlacementMode && roomDraft) {
       roomDraft.dragging = false;
