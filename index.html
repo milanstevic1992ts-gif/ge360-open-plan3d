@@ -44,6 +44,11 @@
         <button id="rotateRoomPlacementBtn" aria-label="Ruota stanza di 90 gradi">↻</button>
         <button id="cancelRoomPlacementBtn">ANNULLA</button>
       </div>
+      <div id="selectionBar" class="selection-bar hidden">
+        <div class="selection-info"><b id="selectionLabel">ELEMENTO SELEZIONATO</b><small>Trascina con un dito per spostare</small></div>
+        <button id="deleteSelectedBtn" class="selection-delete" aria-label="Elimina elemento selezionato">🗑 ELIMINA</button>
+        <button id="closeSelectionBtn" class="selection-close" aria-label="Deseleziona">✕</button>
+      </div>
       <div class="view-controls" aria-label="Controlli vista">
         <button id="zoomOutBtn" aria-label="Zoom indietro">−</button>
         <button id="zoomResetBtn" class="zoom-level" aria-label="Ripristina vista">100%</button>
@@ -53,6 +58,8 @@
     </main>
     <footer class="bottom-bar">
       <button id="drawBtn" class="tool active"><span class="tool-icon">✏️</span><span>SCHIZZA</span></button>
+      <button id="selectBtn" class="tool select-tool"><span class="tool-icon">☝️</span><span>SELEZ.</span></button>
+      <button id="createRoomBtn" class="tool room-tool"><span class="tool-icon">▭</span><span>STANZA</span></button>
       <button id="doorBtn" class="tool"><span class="tool-icon">🚪</span><span>PORTA</span></button>
       <button id="windowBtn" class="tool"><span class="tool-icon">▣</span><span>FINESTRA</span></button>
       <button id="measureBtn" class="tool measure"><span class="tool-icon">📏</span><span id="measureLabel">MISURE</span></button>
