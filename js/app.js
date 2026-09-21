@@ -11,6 +11,7 @@ import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetK
 import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDevice, restoreLaserDevice, listenLaser } from './laser-client.js';
 import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForReference } from './opening-presets.js';
 import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loadWorkUsage, recordWorkUse, searchWorkCatalog } from './work-catalog.js';
+import { createPdfReader } from './pdf-reader.js';
 
 (function () {
   'use strict';
@@ -91,6 +92,11 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   var openingQuickOriginal = null;
   var openingCustomFlow = false;
   var resultHighlightWallIds = [];
+  var pdfArchivePlanId = null;
+  var pdfReader = null;
+  var pdfReaderBlob = null;
+  var pdfReaderVersion = null;
+  var pdfReaderFilename = '';
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -354,6 +360,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
       actions.appendChild(makeButton(calcBusy ? '…' : 'CALCOLA', 'send-plan', function () { sendPlan(plan.id); }));
       if (plan.backend && plan.backend.result) {
         actions.appendChild(makeButton('RISULTATO', 'send-plan result-plan', function () { openResult(plan.id); }));
+        actions.appendChild(makeButton('PDF (' + knownPdfVersionCount(plan) + ')', 'pdf-plan', function () { openPdfArchive(plan.id); }));
         var bInfo = statusInfo(plan.backend.result.status);
         var badge = document.createElement('span');
         badge.className = 'backend-badge ' + bInfo.cls;
@@ -3771,6 +3778,216 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     return rows.sort(function (a,b) { return b.version - a.version; });
   }
 
+  function normalizeVersionRows(data) {
+    var rows = Array.isArray(data)
+      ? data
+      : data && Array.isArray(data.versions)
+        ? data.versions
+        : data && Array.isArray(data.items)
+          ? data.items
+          : [];
+    return rows.filter(function (row) {
+      return row && Number.isFinite(Number(row.version));
+    }).map(function (row) {
+      return Object.assign({}, row, { version: Number(row.version) });
+    }).sort(function (a, b) { return b.version - a.version; });
+  }
+
+  function pdfVersionRows(plan) {
+    var byVersion = new Map();
+    localVersionIndex(plan).forEach(function (row) {
+      byVersion.set(Number(row.version), Object.assign({}, row));
+    });
+    normalizeVersionRows(plan && plan.backend && plan.backend.versionIndex || []).forEach(function (row) {
+      var v = Number(row.version);
+      byVersion.set(v, Object.assign({}, byVersion.get(v) || {}, row, { version: v }));
+    });
+    return Array.from(byVersion.values()).sort(function (a, b) { return b.version - a.version; });
+  }
+
+  function knownPdfVersionCount(plan) {
+    var count = pdfVersionRows(plan).length;
+    return Math.max(count, plan && plan.backend && plan.backend.result ? 1 : 0);
+  }
+
+  function pdfArchivePlan() {
+    return pdfArchivePlanId ? library.find(function (p) { return p.id === pdfArchivePlanId; }) : null;
+  }
+
+  function pdfVersionHasFile(meta) {
+    if (!meta) return true;
+    if (meta.files && Object.prototype.hasOwnProperty.call(meta.files, 'pdf')) return !!meta.files.pdf;
+    if (meta.artifacts && Object.prototype.hasOwnProperty.call(meta.artifacts, 'pdf')) return !!meta.artifacts.pdf;
+    if (Array.isArray(meta.files)) return meta.files.some(function (file) {
+      return String(file && (file.type || file.kind || file.name || '')).toLowerCase().indexOf('pdf') !== -1;
+    });
+    return true;
+  }
+
+  function renderPdfArchiveRows(plan, rows) {
+    var wrap = $('pdfArchiveList');
+    wrap.innerHTML = '';
+    var currentVersion = plan && plan.backend && plan.backend.result ? Number(plan.backend.result.version) : null;
+
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="work-selected-empty">Nessun PDF ancora disponibile. Esegui CALCOLA per creare il primo report.</div>';
+      return;
+    }
+
+    rows.forEach(function (meta) {
+      var row = document.createElement('div');
+      row.className = 'pdf-row' + (Number(meta.version) === currentVersion ? ' current' : '');
+      var left = document.createElement('div');
+      var title = document.createElement('b');
+      title.textContent = 'PDF · VERSIONE ' + meta.version + (Number(meta.version) === currentVersion ? ' · corrente' : '');
+      var small = document.createElement('small');
+      var when = meta.completedAt || meta.createdAt || meta.capturedAt || (meta.result && meta.result.receivedAt);
+      var status = meta.status ? ' · ' + statusInfo(meta.status).label : '';
+      small.textContent = (when ? new Date(when).toLocaleString('it-IT', {
+        day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit'
+      }) : 'Data non disponibile') + status;
+      left.appendChild(title);
+      left.appendChild(small);
+
+      var open = document.createElement('button');
+      open.textContent = pdfVersionHasFile(meta) ? 'LEGGI PDF' : 'PDF NON CREATO';
+      open.disabled = !pdfVersionHasFile(meta);
+      open.addEventListener('click', function () { openPdfVersion(meta.version); });
+
+      row.appendChild(left);
+      row.appendChild(open);
+      wrap.appendChild(row);
+    });
+  }
+
+  async function openPdfArchive(planId) {
+    var plan = library.find(function (p) { return p.id === planId; });
+    if (!plan || !plan.backend || !plan.backend.result) return toast('Prima esegui CALCOLA');
+    pdfArchivePlanId = planId;
+    $('pdfArchiveTitle').textContent = 'PDF · ' + (plan.name || 'Rilievo');
+    $('pdfArchiveBackdrop').classList.remove('hidden');
+    $('pdfArchiveStatus').classList.add('hidden');
+    renderPdfArchiveRows(plan, pdfVersionRows(plan));
+
+    if (!settings.serverUrl || !settings.apiKey) {
+      $('pdfArchiveStatus').textContent = 'Archivio locale visibile · collega il backend per aprire i PDF non già disponibili.';
+      $('pdfArchiveStatus').classList.remove('hidden');
+      return;
+    }
+
+    $('pdfArchiveStatus').textContent = 'Aggiorno l’archivio dal backend…';
+    $('pdfArchiveStatus').classList.remove('hidden');
+    try {
+      var remote = normalizeVersionRows(await backendClient().listVersions(plan.backend.planId || plan.id));
+      if (remote.length) {
+        plan.backend.versionIndex = remote;
+        saveLibrary();
+        renderPdfArchiveRows(plan, pdfVersionRows(plan));
+      }
+      $('pdfArchiveStatus').classList.add('hidden');
+      renderDashboard();
+    } catch (e) {
+      $('pdfArchiveStatus').textContent = 'Non riesco ad aggiornare il server adesso. Mostro le versioni già note.';
+    }
+  }
+
+  function closePdfArchive() {
+    $('pdfArchiveBackdrop').classList.add('hidden');
+  }
+
+  function pdfFilename(plan, version) {
+    var safe = String(plan && plan.name || 'rilievo').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'rilievo';
+    return safe + (version ? ' - v' + version : '') + '.pdf';
+  }
+
+  function updatePdfReaderState(state) {
+    $('pdfReaderLoading').classList.toggle('hidden', !state.loading && !state.rendering);
+    $('pdfReaderError').classList.toggle('hidden', !state.error);
+    $('pdfReaderError').textContent = state.error ? 'Impossibile visualizzare il PDF: ' + state.error : '';
+    $('pdfPageLabel').textContent = state.pages ? state.page + ' / ' + state.pages : '—';
+    $('pdfZoomLabel').textContent = state.ready ? Math.round(state.zoom * 100) + '%' : '—';
+    $('pdfPrevBtn').disabled = !state.ready || state.page <= 1;
+    $('pdfNextBtn').disabled = !state.ready || state.page >= state.pages;
+    $('pdfZoomOutBtn').disabled = !state.ready;
+    $('pdfZoomInBtn').disabled = !state.ready;
+  }
+
+  function ensurePdfReader() {
+    if (pdfReader) return pdfReader;
+    pdfReader = createPdfReader({
+      canvas: $('pdfReaderCanvas'),
+      container: $('pdfReaderViewport'),
+      fallbackFrame: $('pdfReaderFallback'),
+      onState: updatePdfReaderState
+    });
+    return pdfReader;
+  }
+
+  async function openPdfVersion(version, planOverride) {
+    var plan = planOverride || pdfArchivePlan();
+    if (!plan || !plan.backend) return;
+    if (!settings.serverUrl || !settings.apiKey) return toast('Collega il backend per aprire questo PDF');
+
+    pdfArchivePlanId = plan.id;
+    pdfReaderVersion = Number(version) || null;
+    pdfReaderFilename = pdfFilename(plan, pdfReaderVersion);
+    pdfReaderBlob = null;
+    $('pdfReaderTitle').textContent = plan.name || 'Rilievo';
+    $('pdfReaderMeta').textContent = 'PDF · versione ' + (pdfReaderVersion || 'corrente');
+    $('pdfArchiveBackdrop').classList.add('hidden');
+    $('pdfReaderBackdrop').classList.remove('hidden');
+    updatePdfReaderState({ loading: true, rendering: false, error: null, ready: false, page: 1, pages: 0, zoom: 1 });
+
+    try {
+      var blob = await backendClient().downloadArtifact(plan.backend.planId || plan.id, 'pdf', pdfReaderVersion);
+      pdfReaderBlob = blob;
+      await ensurePdfReader().open(blob);
+    } catch (e) {
+      updatePdfReaderState({
+        loading: false,
+        rendering: false,
+        error: e && e.message ? e.message : String(e),
+        ready: false,
+        page: 1,
+        pages: 0,
+        zoom: 1
+      });
+    }
+  }
+
+  async function closePdfReader(returnToArchive) {
+    if (pdfReader) await pdfReader.close();
+    pdfReaderBlob = null;
+    pdfReaderVersion = null;
+    pdfReaderFilename = '';
+    $('pdfReaderBackdrop').classList.add('hidden');
+    if (returnToArchive && pdfArchivePlanId) {
+      var plan = pdfArchivePlan();
+      if (plan) {
+        $('pdfArchiveBackdrop').classList.remove('hidden');
+        renderPdfArchiveRows(plan, pdfVersionRows(plan));
+      }
+    }
+  }
+
+  async function saveCurrentPdf() {
+    if (!pdfReaderBlob || !pdfReaderFilename) return toast('PDF non ancora caricato');
+    try {
+      await saveBlob(pdfReaderBlob, pdfReaderFilename);
+    } catch (e) {
+      toast('Salvataggio non riuscito: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  async function openResultPdfInReader() {
+    var plan = resultPlan();
+    if (!plan || !plan.backend || !plan.backend.result) return;
+    var version = resultOverrideVersion || plan.backend.result.version || null;
+    pdfArchivePlanId = plan.id;
+    closeResult();
+    await openPdfVersion(version, plan);
+  }
+
   function renderVersionHistory(rows) {
     var plan = resultPlan();
     var currentVersion = plan && plan.backend && plan.backend.result ? plan.backend.result.version : null;
@@ -3808,8 +4025,8 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
     renderVersionHistory(rows);
     if (!settings.serverUrl || !settings.apiKey) return;
     try {
-      var remote = await backendClient().listVersions(plan.backend.planId || plan.id);
-      if (Array.isArray(remote) && remote.length) {
+      var remote = normalizeVersionRows(await backendClient().listVersions(plan.backend.planId || plan.id));
+      if (remote.length) {
         plan.backend.versionIndex = remote;
         saveLibrary();
         renderVersionHistory(remote);
@@ -4772,13 +4989,23 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
   $('resultLatestBtn').addEventListener('click', showLatestResultVersion);
   $('resultStaleBtn').addEventListener('click', recalcFromResult);
   $('resultEditBtn').addEventListener('click', function () { var id = resultPlanId; closeResult(); if (id && id !== activePlanId) openPlan(id); });
-  $('resultPdfBtn').addEventListener('click', function () { downloadResult('pdf'); });
+  $('resultPdfBtn').addEventListener('click', openResultPdfInReader);
   $('resultDxfBtn').addEventListener('click', function () { downloadResult('dxf'); });
   $('resultPngBtn').addEventListener('click', function () { downloadResult('png'); });
   $('planName').addEventListener('change', function () { persistActive(); });
   document.querySelectorAll('[data-key]').forEach(function (b) { b.addEventListener('click', function () { keypad(b.dataset.key); }); });
   $('sheetBackdrop').addEventListener('click', function (e) { if (e.target === $('sheetBackdrop')) later(); });
   $('settingsBackdrop').addEventListener('click', function (e) { if (e.target === $('settingsBackdrop')) closeSettings(); });
+  $('closePdfArchiveBtn').addEventListener('click', closePdfArchive);
+  $('pdfArchiveBackdrop').addEventListener('click', function (e) { if (e.target === $('pdfArchiveBackdrop')) closePdfArchive(); });
+  $('closePdfReaderBtn').addEventListener('click', function () { closePdfReader(true); });
+  $('pdfBackArchiveBtn').addEventListener('click', function () { closePdfReader(true); });
+  $('pdfSaveBtn').addEventListener('click', saveCurrentPdf);
+  $('pdfPrevBtn').addEventListener('click', function () { if (pdfReader) pdfReader.previous(); });
+  $('pdfNextBtn').addEventListener('click', function () { if (pdfReader) pdfReader.next(); });
+  $('pdfZoomOutBtn').addEventListener('click', function () { if (pdfReader) pdfReader.zoomOut(); });
+  $('pdfZoomInBtn').addEventListener('click', function () { if (pdfReader) pdfReader.zoomIn(); });
+
   window.addEventListener('online', function () { flushOfflineQueue(); flushPendingPhotos(); });
   setInterval(function () { flushOfflineQueue(); }, 30000);
   window.addEventListener('resize', function () {
