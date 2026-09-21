@@ -274,3 +274,9 @@
   .pdf-reader-controls{grid-template-columns:42px 1fr 42px 42px 1fr 42px;padding-left:7px;padding-right:7px}
   .pdf-reader-actions{grid-template-columns:1fr}
 }
+
+
+/* Dashboard cards with PDF archive */
+.plan-actions:has(.pdf-plan){grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px;grid-template-rows:40px 40px}
+.plan-actions:has(.pdf-plan) button{height:40px}
+.plan-actions:has(.pdf-plan) .delete-plan{grid-column:3;grid-row:1 / span 2;width:44px;height:100%}
