@@ -142,6 +142,13 @@
 /* Aperture rapide: preset prima, quote tecniche solo in Avanzate */
 .opening-quick-card{width:100%;max-width:520px;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.30)}
 .opening-quick-hint{margin:0 0 12px;color:#64748b;font-size:12px;line-height:1.45}
+.door-type-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-bottom:10px}
+.door-type-grid button{min-height:62px;border:1px solid #dbe3ef;border-radius:14px;background:#fff;color:#334155;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:6px 4px;font-weight:1000}
+.door-type-grid button b{font-size:18px;line-height:1}
+.door-type-grid button small{font-size:7px;font-weight:1000;line-height:1.1;text-align:center}
+.door-type-grid button.active{border-color:#0f766e;background:#ecfdf5;color:#0f766e;box-shadow:0 0 0 2px rgba(15,118,110,.09)}
+.door-type-grid button[data-door-kind^="armored"]{background:#fff7ed;border-color:#fed7aa}
+.door-type-grid button[data-door-kind^="armored"].active{background:#ffedd5;border-color:#ea580c;color:#9a3412;box-shadow:0 0 0 2px rgba(234,88,12,.10)}
 .opening-preset-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .opening-preset-grid.window{grid-template-columns:repeat(3,1fr)}
 .opening-preset-grid button{position:relative;min-height:82px;border:1px solid #dbe3ef;border-radius:16px;background:#f8fafc;color:#0f172a;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:8px 5px;font-weight:1000}
@@ -161,7 +168,7 @@
 .opening-reference-btn{width:calc(100% - 24px);margin:5px 12px 10px;min-height:42px;border-radius:12px;background:#f1f5f9;color:#334155;font-size:9px;font-weight:1000}
 .opening-advanced .primary{width:calc(100% - 24px);margin:0 12px 12px}
 .opening-quick-card>.delete-opening{margin-top:10px}
-@media(max-width:390px){.opening-preset-grid{grid-template-columns:repeat(2,1fr)}.opening-preset-grid.window{grid-template-columns:repeat(3,1fr)}.opening-preset-grid button{min-height:74px}.opening-advanced-grid{grid-template-columns:1fr}}
+@media(max-width:390px){.door-type-grid{grid-template-columns:repeat(3,1fr)}.opening-preset-grid{grid-template-columns:repeat(2,1fr)}.opening-preset-grid.window{grid-template-columns:repeat(3,1fr)}.opening-preset-grid button{min-height:74px}.opening-advanced-grid{grid-template-columns:1fr}}
 
 /* GE360 lavori: taccuino rapido da cantiere */
 .works-screen{position:fixed;inset:0;z-index:120;background:#f1f5f9;display:flex;flex-direction:column;overflow:hidden}
