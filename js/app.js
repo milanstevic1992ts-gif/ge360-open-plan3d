@@ -36,6 +36,7 @@ import { createPdfReader } from './pdf-reader.js';
   var selectedWallId = null;
   var selectedEntity = null;
   var selectionDrag = null;
+  var wallStateEditingId = null;
   var currentOpeningId = null;
   var sheetType = null;
   var numberText = '';
@@ -691,6 +692,60 @@ import { createPdfReader } from './pdf-reader.js';
     return buildFaces(walls).find(function (face) { return faceKey(face) === key; }) || null;
   }
 
+  var WALL_STATES = ['existing', 'demolish', 'new', 'close-opening', 'new-opening'];
+
+  function wallConstructionState(wall) {
+    var state = wall && String(wall.constructionState || 'existing');
+    return WALL_STATES.indexOf(state) !== -1 ? state : 'existing';
+  }
+
+  function wallStateLabel(state) {
+    return {
+      'existing': 'ESISTENTE',
+      'demolish': 'DA DEMOLIRE',
+      'new': 'NUOVO MURO',
+      'close-opening': 'CHIUSURA APERTURA',
+      'new-opening': 'NUOVA APERTURA'
+    }[state] || 'ESISTENTE';
+  }
+
+  function openWallStateEditor() {
+    if (!selectedEntity || selectedEntity.type !== 'wall') return toast('Seleziona prima un muro');
+    var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
+    if (!wall) return toast('Muro non trovato');
+    wallStateEditingId = wall.id;
+    var state = wallConstructionState(wall);
+    document.querySelectorAll('#wallStateBackdrop [data-wall-state]').forEach(function (button) {
+      button.classList.toggle('active', button.dataset.wallState === state);
+    });
+    $('wallStateSummary').textContent = 'Stato attuale: ' + wallStateLabel(state);
+    $('wallStateBackdrop').classList.remove('hidden');
+  }
+
+  function closeWallStateEditor() {
+    wallStateEditingId = null;
+    $('wallStateBackdrop').classList.add('hidden');
+  }
+
+  function setWallConstructionState(state) {
+    if (WALL_STATES.indexOf(state) === -1) return;
+    var wall = walls.find(function (w) { return w.id === wallStateEditingId; });
+    if (!wall) return closeWallStateEditor();
+    checkpoint();
+    wall.constructionState = state;
+    if (state === 'existing') {
+      delete wall.constructionThicknessCm;
+      delete wall.thicknessCm;
+    }
+    surfaceCache = null;
+    persistActive();
+    closeWallStateEditor();
+    updateSelectionBar();
+    render();
+    vibrate(16);
+    toast('Muro: ' + wallStateLabel(state));
+  }
+
   function selectableEntityAt(p) {
     // Aperture prima dei muri: altrimenti una porta coincide geometricamente col muro
     // e sarebbe quasi impossibile selezionarla in modalità modifica.
@@ -731,11 +786,15 @@ import { createPdfReader } from './pdf-reader.js';
     }
 
     $('workSelectedBtn').classList.toggle('hidden', selectedEntity.type === 'opening');
+    $('wallStateBtn').classList.toggle('hidden', selectedEntity.type !== 'wall');
 
     if (selectedEntity.type === 'wall') {
       var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
       var measure = wall && Number.isFinite(wall.lengthCm) ? ' · ' + metersText(wall.lengthCm) + ' m' : '';
-      $('selectionLabel').textContent = 'MURO' + measure;
+      var state = wallConstructionState(wall);
+      var stateSuffix = state !== 'existing' ? ' · ' + wallStateLabel(state) : '';
+      $('selectionLabel').textContent = 'MURO' + measure + stateSuffix;
+      $('wallStateBtn').textContent = state === 'existing' ? 'STATO' : wallStateLabel(state);
       $('selectionHint').textContent = 'Trascina con un dito per spostare il muro';
     } else if (selectedEntity.type === 'opening') {
       var opening = openings.find(function (o) { return o.id === selectedEntity.id; });
@@ -6076,6 +6135,14 @@ import { createPdfReader } from './pdf-reader.js';
   $('selectBtn').addEventListener('click', function () { setMode('select'); });
   $('createRoomBtn').addEventListener('click', openRectRoomModal);
   $('editSelectedBtn').addEventListener('click', editSelectedEntity);
+  $('wallStateBtn').addEventListener('click', openWallStateEditor);
+  $('closeWallStateBtn').addEventListener('click', closeWallStateEditor);
+  $('wallStateBackdrop').addEventListener('click', function (e) {
+    if (e.target === $('wallStateBackdrop')) closeWallStateEditor();
+  });
+  document.querySelectorAll('#wallStateBackdrop [data-wall-state]').forEach(function (button) {
+    button.addEventListener('click', function () { setWallConstructionState(button.dataset.wallState); });
+  });
   $('workSelectedBtn').addEventListener('click', openWorksForSelection);
   $('deleteSelectedBtn').addEventListener('click', deleteSelectedEntity);
   $('closeSelectionBtn').addEventListener('click', function () { clearSelection(true); });
