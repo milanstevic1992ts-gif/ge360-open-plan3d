@@ -63,7 +63,6 @@ export function resolveAnchor(anchor, walls) {
 }
 
 export function buildPlanPayload(plan, extra = {}) {
-  const thicknessCm = positive(plan.wallThicknessCm) || DEFAULT_WALL_THICKNESS_CM;
   const walls = (plan.walls || []).map(w => {
     const out = Object.assign({}, w);
     out.lengthCm = positive(w.lengthCm);
@@ -71,7 +70,23 @@ export function buildPlanPayload(plan, extra = {}) {
     out.constructionState = allowedStates.includes(String(w.constructionState))
       ? String(w.constructionState)
       : 'existing';
-    if (!positive(out.thicknessMm)) out.thicknessMm = Math.round(thicknessCm * 10);
+
+    const constructionThicknessCm = positive(w.constructionThicknessCm);
+    if (out.constructionState === 'demolish' || out.constructionState === 'new') {
+      if (constructionThicknessCm) {
+        out.constructionThicknessCm = constructionThicknessCm;
+        // thicknessMm resta compatibile con il normalizzatore geometrico backend,
+        // ma deriva dalla misura esplicita dell'utente e non da un valore fittizio.
+        out.thicknessMm = Math.round(constructionThicknessCm * 10);
+      } else {
+        delete out.constructionThicknessCm;
+        delete out.thicknessMm;
+      }
+    } else {
+      delete out.constructionThicknessCm;
+      delete out.thicknessMm;
+      delete out.thicknessCm;
+    }
     return out;
   });
   const openings = (plan.openings || []).map(o => {
@@ -149,7 +164,7 @@ export function buildPlanPayload(plan, extra = {}) {
 /** Impronta del contenuto geometrico: serve a capire se un risultato del server è ancora attuale. */
 export function payloadFingerprint(payload) {
   const core = JSON.stringify({
-    walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.constructionState, w.thicknessMm]),
+    walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.constructionState, w.constructionThicknessCm, w.thicknessMm]),
     openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.windowKind, o.category, o.leaves, o.sliding, o.armored, o.balconyDoor, o.hingeEnd, o.swingDirection, o.swingSide, o.slideTo, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
     rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
     diagonals: payload.diagonals,
