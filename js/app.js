@@ -12,6 +12,7 @@ import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDe
 import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForReference, doorPresetKeys, doorKindSpec, applyDoorKind, normalizeDoorKind, normalizeWindowKind, windowKindSpec, applyWindowKind } from './opening-presets.js';
 import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loadWorkUsage, recordWorkUse, searchWorkCatalog } from './work-catalog.js';
 import { createPdfReader } from './pdf-reader.js';
+import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines } from './construction-quantities.js';
 
 (function () {
   'use strict';
@@ -5138,7 +5139,81 @@ import { createPdfReader } from './pdf-reader.js';
     $('worksScreen').classList.add('hidden');
   }
 
+  function fmtConstructionQty(value, unit) {
+    if (!Number.isFinite(Number(value))) return '—';
+    var digits = unit === 'm³' ? 3 : 2;
+    return Number(value).toFixed(digits).replace('.', ',') + ' ' + unit;
+  }
+
+  function appendConstructionRow(wrap, label, value, unit) {
+    var row = document.createElement('div');
+    row.className = 'construction-auto-row';
+    var left = document.createElement('span');
+    left.textContent = label;
+    var right = document.createElement('strong');
+    right.textContent = fmtConstructionQty(value, unit);
+    row.appendChild(left);
+    row.appendChild(right);
+    wrap.appendChild(row);
+  }
+
+  function renderConstructionAutoCard() {
+    var card = $('constructionAutoCard');
+    var body = $('constructionAutoBody');
+    if (!card || !body || !workTarget) return;
+    body.innerHTML = '';
+
+    if (workTarget.type === 'wall') {
+      var wall = walls.find(function (w) { return w.id === workTarget.id; });
+      var metrics = wallConstructionMetrics(wall, wallHeightM);
+      if (!metrics) {
+        card.classList.add('hidden');
+        return;
+      }
+
+      card.classList.remove('hidden');
+      if (!metrics.complete) {
+        var note = document.createElement('div');
+        note.className = 'construction-auto-note';
+        note.textContent = 'Completa misura e spessore del muro per ottenere le quantità automatiche.';
+        body.appendChild(note);
+        return;
+      }
+
+      constructionWorkLines(metrics).forEach(function (line) {
+        appendConstructionRow(body, line.label, line.quantity, line.unit);
+      });
+      var note2 = document.createElement('div');
+      note2.className = 'construction-auto-note';
+      note2.textContent = 'Volume geometrico puro: nessun coefficiente di macerie, sfrido o maggiorazione applicato.';
+      body.appendChild(note2);
+      return;
+    }
+
+    if (workTarget.type === 'plan') {
+      var summary = summarizeConstruction(walls, wallHeightM);
+      if (!summary.hasConstruction) {
+        card.classList.add('hidden');
+        return;
+      }
+      card.classList.remove('hidden');
+      if (summary.totals.demolitionAreaM2 > 0) {
+        appendConstructionRow(body, 'Pareti da demolire', summary.totals.demolitionAreaM2, 'm²');
+        appendConstructionRow(body, 'Volume geometrico demolizioni', summary.totals.demolitionVolumeM3, 'm³');
+      }
+      if (summary.totals.newWallAreaM2 > 0) {
+        appendConstructionRow(body, 'Nuove murature', summary.totals.newWallAreaM2, 'm²');
+        appendConstructionRow(body, 'Volume geometrico nuove murature', summary.totals.newWallVolumeM3, 'm³');
+        appendConstructionRow(body, 'Due facce nuove da finire', summary.totals.newWallFinishFacesM2, 'm²');
+      }
+      return;
+    }
+
+    card.classList.add('hidden');
+  }
+
   function renderWorkRooms() {
+    renderConstructionAutoCard();
     var wrap = $('worksRoomStrip');
     wrap.innerHTML = '';
     function chip(label, sub, target) {
@@ -5183,6 +5258,7 @@ import { createPdfReader } from './pdf-reader.js';
 
   function renderWorkSuggestions() {
     if ($('worksScreen').classList.contains('hidden')) return;
+    renderConstructionAutoCard();
     $('worksTargetTitle').textContent = workTargetLabel();
     var query = $('workSearchInput').value || '';
     var usage = loadWorkUsage(localStorage);
