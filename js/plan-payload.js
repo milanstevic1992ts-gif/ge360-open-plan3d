@@ -8,6 +8,8 @@
  *   e le coordinate vengono risolte al momento dell'invio, così seguono eventuali spostamenti.
  */
 
+import { summarizeConstruction } from './construction-quantities.js';
+
 export const PLAN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const WALL_REFERENCES = ['interior', 'partitionAxis', 'axis'];
 export const DEFAULT_WALL_THICKNESS_CM = 12;
@@ -157,7 +159,8 @@ export function buildPlanPayload(plan, extra = {}) {
     works: plan.works || [],
     wallHeightM: positive(plan.wallHeightM) || 2.70,
     wallReference,
-    surfaces: plan.surfaceSummary || null
+    surfaces: plan.surfaceSummary || null,
+    construction: summarizeConstruction(walls, positive(plan.wallHeightM) || 2.70)
   }, extra);
 }
 
