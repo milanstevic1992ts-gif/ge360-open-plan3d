@@ -74,7 +74,16 @@ export function buildPlanPayload(plan, extra = {}) {
     const out = Object.assign({}, o);
     ['widthCm', 'heightCm'].forEach(k => { out[k] = positive(o[k]); });
     ['offsetCm', 'sillHeightCm'].forEach(k => { out[k] = nonNegative(o[k]); });
-    if (o.type === 'door') delete out.sillHeightCm;
+    if (o.type === 'door') {
+      delete out.sillHeightCm;
+      const allowedKinds = ['internal', 'double', 'sliding', 'armored', 'armored-double'];
+      const fallbackKind = o.armored ? (Number(o.leaves) === 2 ? 'armored-double' : 'armored') : 'internal';
+      out.doorKind = allowedKinds.includes(String(o.doorKind)) ? String(o.doorKind) : fallbackKind;
+      out.armored = out.doorKind === 'armored' || out.doorKind === 'armored-double';
+      out.sliding = out.doorKind === 'sliding';
+      out.leaves = out.doorKind === 'double' || out.doorKind === 'armored-double' ? 2 : 1;
+      out.category = out.armored ? 'armored' : 'interior';
+    }
     return out;
   });
   const rooms = (plan.rooms || []).map(r => {
@@ -117,7 +126,7 @@ export function buildPlanPayload(plan, extra = {}) {
 export function payloadFingerprint(payload) {
   const core = JSON.stringify({
     walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.thicknessMm]),
-    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
+    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.category, o.leaves, o.sliding, o.armored, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
     rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
     diagonals: payload.diagonals,
     h: payload.wallHeightM,
