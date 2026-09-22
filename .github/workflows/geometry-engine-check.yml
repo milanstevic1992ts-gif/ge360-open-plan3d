@@ -295,6 +295,7 @@ jobs:
           node scripts/test-backend-client.mjs
           node scripts/test-offline-queue.mjs
           node scripts/test-opening-presets.mjs
+          node scripts/test-wall-construction.mjs
           node scripts/test-work-catalog.mjs
           grep -q "buildPlanPayload" js/app.js
           grep -q "processPlan" js/app.js
