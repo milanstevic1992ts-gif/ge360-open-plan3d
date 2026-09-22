@@ -1,4 +1,4 @@
-import { solveFloorPlan } from '../geometry-engine/index.js';
+import { solveFloorPlan, validateFloorPlan } from '../geometry-engine/index.js';
 import { buildFaces, findFaceAtPoint, matchRoomFace, calculateSurfaces } from './room-surfaces.js';
 import { straightenPolyline, snapPolylineCornersToWalls } from './sketch-snap.js';
 import { backendRootFromApi, normalizeBackendApiUrl, parseBridgeQr } from './backend-bridge.js';
@@ -14,6 +14,7 @@ import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loa
 import { createPdfReader } from './pdf-reader.js';
 import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines } from './construction-quantities.js';
 import { constructionVisual, activeConstructionStates } from './construction-visuals.js';
+import { buildGeometryDiagnostics, visibleDiagnostics } from './geometry-diagnostics.js';
 
 (function () {
   'use strict';
@@ -104,6 +105,8 @@ import { constructionVisual, activeConstructionStates } from './construction-vis
   var pdfReaderBlob = null;
   var pdfReaderVersion = null;
   var pdfReaderFilename = '';
+  var geometryDiagnosticsCache = { key: null, report: null };
+
   var connectionState = {
     checking: false,
     checked: false,
@@ -5564,6 +5567,255 @@ import { constructionVisual, activeConstructionStates } from './construction-vis
     render();
   }
 
+  function geometryDiagnosticKey() {
+    return JSON.stringify({
+      walls: walls.map(function (w) {
+        return [w.id, w.a, w.b, w.lengthCm, w.constructionState, w.constructionThicknessCm];
+      }),
+      openings: openings.map(function (o) {
+        return [o.id, o.type, o.wallId, o.widthCm, o.offsetCm, o.referenceEnd, o.position];
+      }),
+      diagonals: diagonals.map(function (d) {
+        return [d.id, d.a, d.b, d.lengthCm];
+      }),
+      works: works.map(function (w) {
+        return [w.id, w.workId, w.targetType, w.targetId, w.label];
+      })
+    });
+  }
+
+  function geometryDiagnostics(includeIgnored) {
+    var key = geometryDiagnosticKey();
+    var report = geometryDiagnosticsCache.key === key ? geometryDiagnosticsCache.report : null;
+    if (!report) {
+      var input = solverInput();
+      var validation;
+      var solution = null;
+      try {
+        validation = validateFloorPlan(input, { mode: 'normal' });
+      } catch (e) {
+        validation = {
+          valid: false,
+          errors: [{ type:'diagnostic_exception', severity:'error', message:e && e.message ? e.message : String(e) }],
+          warnings: []
+        };
+      }
+
+      var allMeasured = walls.length && walls.every(function (wall) {
+        return Number.isFinite(wall.lengthCm) && wall.lengthCm > 0;
+      });
+      if (allMeasured) {
+        try { solution = solveFloorPlan(input, { mode: 'normal' }); } catch (_) {}
+      }
+
+      report = buildGeometryDiagnostics({
+        validation: validation,
+        solution: solution,
+        walls: walls,
+        openings: openings,
+        diagonals: diagonals,
+        works: works
+      });
+      geometryDiagnosticsCache = { key:key, report:report };
+    }
+
+    if (includeIgnored === false) return report;
+    var plan = currentPlan();
+    return visibleDiagnostics(report, plan && plan.geometryIgnoredIssues || []);
+  }
+
+  function geometryIssueTitle(issue) {
+    return {
+      missing_length: 'MISURA MANCANTE',
+      zero_length_wall: 'MISURA NON VALIDA',
+      impossible_closure: 'MISURE INCOMPATIBILI',
+      closure_inconsistent: 'MISURE INCOMPATIBILI',
+      closure_error: 'STANZA NON CHIUSA',
+      open_perimeter: 'PERIMETRO APERTO',
+      near_miss_endpoints: 'ANGOLI QUASI UNITI',
+      overlapping_walls: 'MURI SOVRAPPOSTI',
+      sketch_proportion: 'PROPORZIONE DA VERIFICARE',
+      near_perpendicular: 'ANGOLO QUASI A 90°',
+      opening_out_of_bounds: 'APERTURA FUORI MURO',
+      opening_wider_than_wall: 'APERTURA TROPPO LARGA',
+      overlapping_openings: 'APERTURE SOVRAPPOSTE',
+      opening_wall_not_found: 'APERTURA SENZA MURO',
+      diagonal_mismatch: 'DIAGONALE DA VERIFICARE',
+      construction_missing_thickness: 'SPESSORE MANCANTE',
+      orphan_work_target: 'LAVORAZIONE SENZA ELEMENTO',
+      disconnected_walls: 'GRUPPI NON COLLEGATI',
+      t_junction: 'INNESTO A T'
+    }[issue && issue.type] || 'CONTROLLO';
+  }
+
+  function closeGeometryCheck() {
+    $('geometryCheckBackdrop').classList.add('hidden');
+  }
+
+  function geometryIssueByKey(key) {
+    var report = geometryDiagnostics(false);
+    return (report.issues || []).find(function (issue) { return issue.key === key; }) || null;
+  }
+
+  function ignoreGeometryIssue(key) {
+    var plan = currentPlan();
+    if (!plan || !key) return;
+    if (!Array.isArray(plan.geometryIgnoredIssues)) plan.geometryIgnoredIssues = [];
+    if (plan.geometryIgnoredIssues.indexOf(key) === -1) plan.geometryIgnoredIssues.push(key);
+    saveLibrary();
+    renderGeometryCheck();
+    updateUI();
+    toast('Controllo ignorato');
+  }
+
+  function resetIgnoredGeometryIssues() {
+    var plan = currentPlan();
+    if (!plan) return;
+    plan.geometryIgnoredIssues = [];
+    saveLibrary();
+    renderGeometryCheck();
+    updateUI();
+    toast('Controlli ignorati ripristinati');
+  }
+
+  function fixGeometryIssue(key) {
+    var issue = geometryIssueByKey(key);
+    if (!issue) return;
+    closeGeometryCheck();
+
+    if (issue.action === 'solver') {
+      openSolver();
+      return;
+    }
+
+    if (issue.action === 'opening') {
+      var opening = openings.find(function (o) {
+        return (issue.openings || []).indexOf(o.id) !== -1;
+      });
+      if (!opening) return toast('Apertura non trovata');
+      setMode('select', false);
+      selectedEntity = { type:'opening', id:opening.id, wallId:opening.wallId, name:opening.type };
+      updateSelectionBar();
+      editOpening(opening);
+      return;
+    }
+
+    if (issue.action === 'wall') {
+      var wall = walls.find(function (w) {
+        return (issue.walls || []).indexOf(w.id) !== -1;
+      });
+      if (!wall) return toast('Muro non trovato');
+      setMode('select', false);
+      selectedEntity = { type:'wall', id:wall.id, wallIds:[wall.id], name:'Muro' };
+      updateSelectionBar();
+      if (
+        issue.type === 'construction_missing_thickness' ||
+        ((wallConstructionState(wall) === 'new' || wallConstructionState(wall) === 'demolish') &&
+          !(Number(wall.constructionThicknessCm) > 0))
+      ) {
+        openWallStateEditor();
+      } else {
+        editWallMeasurement(wall);
+      }
+      return;
+    }
+
+    if (issue.action === 'diagonal') {
+      var diagonal = diagonals.find(function (d) { return d.id === issue.diagonalId; });
+      if (!diagonal) return toast('Diagonale non trovata');
+      currentDiagonalId = diagonal.id;
+      numberText = metersText(diagonal.lengthCm);
+      openSheet('diagonal');
+      render();
+      return;
+    }
+
+    if (issue.action === 'works') {
+      openWorks();
+      return;
+    }
+
+    toast('Controllo informativo: puoi continuare');
+  }
+
+  function renderGeometryCheck() {
+    var report = geometryDiagnostics(true);
+    var plan = currentPlan();
+    var ignoredCount = plan && Array.isArray(plan.geometryIgnoredIssues) ? plan.geometryIgnoredIssues.length : 0;
+    $('geometryCheckMeta').textContent =
+      walls.length + ' muri · ' + openings.length + ' aperture · ' + diagonals.length + ' diagonali' +
+      (ignoredCount ? ' · ' + ignoredCount + ' ignorati' : '');
+
+    var summaryEl = $('geometryCheckSummary');
+    if (report.errors.length) {
+      summaryEl.className = 'geometry-check-summary error';
+      summaryEl.textContent = report.errors.length + ' errori · ' + report.warnings.length + ' avvisi. Puoi comunque continuare il rilievo.';
+    } else if (report.warnings.length) {
+      summaryEl.className = 'geometry-check-summary warn';
+      summaryEl.textContent = report.warnings.length + ' controlli da verificare. Nessun blocco automatico.';
+    } else {
+      summaryEl.className = 'geometry-check-summary ok';
+      summaryEl.textContent = report.info.length
+        ? 'Geometria utilizzabile · ' + report.info.length + ' suggerimenti.'
+        : 'Geometria coerente ✓';
+    }
+
+    var list = $('geometryCheckList');
+    list.innerHTML = '';
+    if (!report.issues.length) {
+      var empty = document.createElement('div');
+      empty.className = 'geometry-check-summary ok';
+      empty.textContent = 'Nessun problema geometrico attivo.';
+      list.appendChild(empty);
+      return;
+    }
+
+    report.issues.forEach(function (issue) {
+      var card = document.createElement('article');
+      card.className = 'geometry-issue ' + (issue.severity || 'info');
+
+      var head = document.createElement('div');
+      head.className = 'geometry-issue-head';
+      var title = document.createElement('b');
+      title.textContent = geometryIssueTitle(issue);
+      var severity = document.createElement('span');
+      severity.textContent = issue.severity === 'error' ? 'ERRORE' : issue.severity === 'warning' ? 'VERIFICA' : 'SUGGERIMENTO';
+      head.appendChild(title);
+      head.appendChild(severity);
+
+      var textEl = document.createElement('p');
+      textEl.textContent = issue.message || 'Controllo geometrico';
+
+      var actions = document.createElement('div');
+      actions.className = 'geometry-issue-actions';
+      if (issue.action && issue.action !== 'none') {
+        var fix = document.createElement('button');
+        fix.type = 'button';
+        fix.className = 'fix';
+        fix.textContent = 'CORREGGI';
+        fix.addEventListener('click', function () { fixGeometryIssue(issue.key); });
+        actions.appendChild(fix);
+      }
+      var ignore = document.createElement('button');
+      ignore.type = 'button';
+      ignore.className = 'ignore';
+      ignore.textContent = 'IGNORA';
+      ignore.addEventListener('click', function () { ignoreGeometryIssue(issue.key); });
+      actions.appendChild(ignore);
+
+      card.appendChild(head);
+      card.appendChild(textEl);
+      card.appendChild(actions);
+      list.appendChild(card);
+    });
+  }
+
+  function openGeometryCheck() {
+    if (!walls.length) return toast('Prima disegna la pianta');
+    renderGeometryCheck();
+    $('geometryCheckBackdrop').classList.remove('hidden');
+  }
+
   function updateUI() {
     var has = walls.length > 0;
     $('emptyHint').classList.toggle('hidden', has || !!currentStroke);
@@ -5582,7 +5834,25 @@ import { constructionVisual, activeConstructionStates } from './construction-vis
     var notesTitle = $('notesBtn').querySelector('b');
     if (notesTitle) notesTitle.textContent = 'APPUNTI' + (notes.length ? ' · ' + notes.length : '');
     var missing = walls.filter(function (w) { return !w.lengthCm; }).length;
-    $('statusPill').textContent = walls.length + ' muri · ' + (missing ? missing + ' da misurare' : 'misure complete ✓');
+    var statusPill = $('statusPill');
+    statusPill.classList.remove('geom-ok','geom-warn','geom-error');
+    if (missing) {
+      statusPill.textContent = walls.length + ' muri · ' + missing + ' da misurare';
+    } else if (has) {
+      var geometryReport = geometryDiagnostics(true);
+      if (geometryReport.errors.length) {
+        statusPill.classList.add('geom-error');
+        statusPill.textContent = '⚠ ' + geometryReport.errors.length + ' errori geometrici';
+      } else if (geometryReport.warnings.length) {
+        statusPill.classList.add('geom-warn');
+        statusPill.textContent = '⚠ ' + geometryReport.warnings.length + ' controlli geometrici';
+      } else {
+        statusPill.classList.add('geom-ok');
+        statusPill.textContent = geometryReport.info.length
+          ? '✓ Geometria OK · ' + geometryReport.info.length + ' suggerimenti'
+          : '✓ Geometria OK';
+      }
+    }
     $('measureLabel').textContent = missing ? 'MISURE ' + missing : 'MISURE ✓';
   }
 
@@ -6528,6 +6798,16 @@ import { constructionVisual, activeConstructionStates } from './construction-vis
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
   $('selectBtn').addEventListener('click', function () { setMode('select'); });
   $('createRoomBtn').addEventListener('click', openRectRoomModal);
+  $('statusPill').addEventListener('click', openGeometryCheck);
+  $('closeGeometryCheckBtn').addEventListener('click', closeGeometryCheck);
+  $('geometryCheckBackdrop').addEventListener('click', function (e) {
+    if (e.target === $('geometryCheckBackdrop')) closeGeometryCheck();
+  });
+  $('resetGeometryIgnoredBtn').addEventListener('click', resetIgnoredGeometryIssues);
+  $('geometryOpenSolverBtn').addEventListener('click', function () {
+    closeGeometryCheck();
+    openSolver();
+  });
   $('editSelectedBtn').addEventListener('click', editSelectedEntity);
   $('wallStateBtn').addEventListener('click', openWallStateEditor);
   $('closeWallStateBtn').addEventListener('click', closeWallStateEditor);
