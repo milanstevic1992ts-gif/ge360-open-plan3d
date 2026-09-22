@@ -3441,11 +3441,6 @@ import { buildGeometryDiagnostics, visibleDiagnostics } from './geometry-diagnos
 
   function openPresentation() {
     cancelPickModes();
-    var serverResult = authoritativeResult(currentPlan());
-    if (serverResult) {
-      toast('Presentazione dal risultato autorevole del server');
-      return openResult(activePlanId);
-    }
     if (!walls.length) return toast('Prima disegna la pianta');
     var missing = walls.filter(function (w) { return !Number.isFinite(w.lengthCm) || w.lengthCm <= 0; });
     if (missing.length) {
@@ -3454,7 +3449,16 @@ import { buildGeometryDiagnostics, visibleDiagnostics } from './geometry-diagnos
     }
 
     var solved = solvedPresentationWalls();
+    var originalById = new Map(walls.map(function (w) { return [w.id, w]; }));
     var cleanWalls = solved.walls && solved.walls.length ? solved.walls : clone(walls);
+    cleanWalls = cleanWalls.map(function (wall) {
+      var original = originalById.get(wall.id) || {};
+      return Object.assign({}, original, wall, {
+        constructionState: wallConstructionState(original),
+        constructionThicknessCm: original.constructionThicknessCm
+      });
+    });
+
     var cache = calculateSurfaces(cleanWalls, rooms, wallHeightM);
     presentationModel = {
       walls: cleanWalls,
@@ -3473,7 +3477,7 @@ import { buildGeometryDiagnostics, visibleDiagnostics } from './geometry-diagnos
       wallsM2: null,
       wallsCeilingM2: null
     };
-    $('presentationStamp').textContent = 'Rilievo indicativo · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
+    $('presentationStamp').textContent = 'Pianta pulita · h ' + wallHeightM.toFixed(2).replace('.', ',') + ' m · ' + state.label;
     $('presentationSummary').innerHTML =
       presentationCard('PAVIMENTO', displayTotals.floorM2) +
       presentationCard('SOFFITTO', displayTotals.ceilingM2) +
@@ -3528,7 +3532,7 @@ import { buildGeometryDiagnostics, visibleDiagnostics } from './geometry-diagnos
     presentationModel.rooms.forEach(function (room, idx) {
       var face = matchRoomFace(room, faces);
       if (!face) return;
-      pctx.fillStyle = idx % 2 ? 'rgba(14,165,233,.055)' : 'rgba(37,99,235,.045)';
+      pctx.fillStyle = idx % 2 ? 'rgba(14,165,233,.045)' : 'rgba(37,99,235,.035)';
       pctx.beginPath();
       face.polygon.forEach(function (p, i) {
         var sp = tp(p);
@@ -3538,51 +3542,143 @@ import { buildGeometryDiagnostics, visibleDiagnostics } from './geometry-diagnos
       pctx.fill();
     });
 
+    // Muri: stessa convenzione tecnica dell'editor, senza quote.
     pctx.lineCap = 'round';
     pctx.lineJoin = 'round';
     pwalls.forEach(function (wall) {
       var a = tp(wall.a), b = tp(wall.b);
-      pctx.strokeStyle = '#0f172a';
-      pctx.lineWidth = 6;
+      var visual = constructionVisual(wall && wall.constructionState);
+      pctx.strokeStyle = visual.stroke;
+      pctx.lineWidth = visual.state === 'new' || visual.state === 'close-opening' ? 7 : 6;
+      pctx.setLineDash((visual.dash || []).map(function (v) { return Math.max(1, v * .8); }));
       pctx.beginPath();
       pctx.moveTo(a.x, a.y);
       pctx.lineTo(b.x, b.y);
       pctx.stroke();
-
-      if (Number.isFinite(wall.lengthCm)) {
-        var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-        var label = (wall.lengthCm / 100).toFixed(2).replace('.', ',') + ' m';
-        pctx.font = '900 10px system-ui';
-        var tw = pctx.measureText(label).width + 10;
-        pctx.fillStyle = 'rgba(255,255,255,.96)';
-        pctx.fillRect(mx - tw / 2, my - 8, tw, 16);
-        pctx.fillStyle = '#475569';
-        pctx.textAlign = 'center';
-        pctx.textBaseline = 'middle';
-        pctx.fillText(label, mx, my);
-      }
     });
+    pctx.setLineDash([]);
 
+    function openingPresentationSegment(opening, wall) {
+      var segment = openingSegmentOnWall(opening, wall);
+      if (!segment) return null;
+      return {
+        a: tp(segment.a),
+        b: tp(segment.b),
+        center: tp(segment.center)
+      };
+    }
+
+    // Aperture reali: cancellano il tratto di muro e disegnano il simbolo tecnico.
     presentationModel.openings.forEach(function (opening) {
       var wall = pwalls.find(function (w) { return w.id === opening.wallId; });
       if (!wall) return;
-      var q = openingWorldPoint(opening, wall);
-      if (!q) return;
-      var p = tp(q);
-      pctx.fillStyle = opening.type === 'door' ? '#16a34a' : '#0891b2';
+      var segment = openingPresentationSegment(opening, wall);
+      if (!segment) return;
+      var a = segment.a, b = segment.b, center = segment.center;
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var len = Math.max(1, Math.hypot(dx, dy));
+      var ux = dx / len, uy = dy / len;
+      var nx = -uy, ny = ux;
+
+      pctx.save();
       pctx.strokeStyle = '#ffffff';
-      pctx.lineWidth = 3;
+      pctx.lineWidth = 11;
+      pctx.lineCap = 'butt';
       pctx.beginPath();
-      pctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-      pctx.fill();
+      pctx.moveTo(a.x - ux * 2, a.y - uy * 2);
+      pctx.lineTo(b.x + ux * 2, b.y + uy * 2);
       pctx.stroke();
-      pctx.fillStyle = '#ffffff';
-      pctx.font = '900 8px system-ui';
-      pctx.textAlign = 'center';
-      pctx.textBaseline = 'middle';
-      pctx.fillText(opening.type === 'door' ? 'P' : 'F', p.x, p.y + .5);
+
+      pctx.strokeStyle = '#0f172a';
+      pctx.lineWidth = 2;
+      pctx.beginPath();
+      pctx.moveTo(a.x + nx * 5, a.y + ny * 5);
+      pctx.lineTo(a.x - nx * 5, a.y - ny * 5);
+      pctx.moveTo(b.x + nx * 5, b.y + ny * 5);
+      pctx.lineTo(b.x - nx * 5, b.y - ny * 5);
+      pctx.stroke();
+
+      if (opening.type === 'door') {
+        var doorMeta = doorKindSpec(opening.doorKind || 'internal');
+        if (doorMeta.sliding) {
+          pctx.strokeStyle = opening.armored ? '#9a3412' : '#334155';
+          pctx.lineWidth = opening.armored ? 3 : 2;
+          pctx.beginPath();
+          pctx.moveTo(a.x + nx * 7, a.y + ny * 7);
+          pctx.lineTo(b.x + nx * 7, b.y + ny * 7);
+          pctx.stroke();
+        } else if (doorMeta.leaves === 2) {
+          var mid = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 };
+          var side = opening.swingSide === -1 ? -1 : 1;
+          [{hinge:a,closed:mid},{hinge:b,closed:mid}].forEach(function (leaf) {
+            var ldx=leaf.closed.x-leaf.hinge.x, ldy=leaf.closed.y-leaf.hinge.y;
+            var lr=Math.max(8,Math.hypot(ldx,ldy));
+            var tip={x:leaf.hinge.x+(-ldy/lr)*lr*side,y:leaf.hinge.y+(ldx/lr)*lr*side};
+            pctx.strokeStyle = opening.armored ? '#9a3412' : '#334155';
+            pctx.lineWidth = opening.armored ? 3 : 2;
+            pctx.beginPath(); pctx.moveTo(leaf.hinge.x,leaf.hinge.y); pctx.lineTo(tip.x,tip.y); pctx.stroke();
+            pctx.strokeStyle='#94a3b8'; pctx.lineWidth=1.2;
+            pctx.beginPath();
+            pctx.arc(leaf.hinge.x,leaf.hinge.y,lr,
+              Math.atan2(leaf.closed.y-leaf.hinge.y,leaf.closed.x-leaf.hinge.x),
+              Math.atan2(tip.y-leaf.hinge.y,tip.x-leaf.hinge.x),side<0);
+            pctx.stroke();
+          });
+        } else {
+          var hingeAtA = opening.hingeEnd !== 'b';
+          var hinge = hingeAtA ? a : b;
+          var closed = hingeAtA ? b : a;
+          var ldx2=closed.x-hinge.x, ldy2=closed.y-hinge.y;
+          var radius=Math.max(10,Math.hypot(ldx2,ldy2));
+          var side2=opening.swingSide===-1?-1:1;
+          var tip2={x:hinge.x+(-ldy2/radius)*radius*side2,y:hinge.y+(ldx2/radius)*radius*side2};
+          pctx.strokeStyle = opening.armored ? '#9a3412' : '#334155';
+          pctx.lineWidth = opening.armored ? 3 : 2;
+          pctx.beginPath(); pctx.moveTo(hinge.x,hinge.y); pctx.lineTo(tip2.x,tip2.y); pctx.stroke();
+          pctx.strokeStyle='#94a3b8'; pctx.lineWidth=1.2;
+          pctx.beginPath();
+          pctx.arc(hinge.x,hinge.y,radius,
+            Math.atan2(closed.y-hinge.y,closed.x-hinge.x),
+            Math.atan2(tip2.y-hinge.y,tip2.x-hinge.x),side2<0);
+          pctx.stroke();
+        }
+        if (opening.armored) {
+          pctx.fillStyle='#9a3412';
+          pctx.font='1000 8px system-ui';
+          pctx.textAlign='center'; pctx.textBaseline='middle';
+          pctx.fillText('B',center.x-nx*10,center.y-ny*10);
+        }
+      } else {
+        var wm = windowKindSpec(opening.windowKind || 'single', settings);
+        pctx.strokeStyle = wm.balconyDoor ? '#15803d' : '#0891b2';
+        pctx.lineWidth = 2;
+        [-2.6,2.6].forEach(function (off) {
+          pctx.beginPath();
+          pctx.moveTo(a.x+nx*off,a.y+ny*off);
+          pctx.lineTo(b.x+nx*off,b.y+ny*off);
+          pctx.stroke();
+        });
+        var leaves=Math.max(1,Number(wm.leaves)||1);
+        for(var wi=1;wi<leaves;wi++){
+          var rr=wi/leaves;
+          var mx=a.x+(b.x-a.x)*rr, my=a.y+(b.y-a.y)*rr;
+          pctx.lineWidth=1.2;
+          pctx.beginPath();
+          pctx.moveTo(mx+nx*5,my+ny*5);
+          pctx.lineTo(mx-nx*5,my-ny*5);
+          pctx.stroke();
+        }
+        if (wm.balconyDoor) {
+          pctx.fillStyle='#166534';
+          pctx.font='1000 8px system-ui';
+          pctx.textAlign='center'; pctx.textBaseline='middle';
+          pctx.fillText('PF',center.x-nx*10,center.y-ny*10);
+        }
+      }
+      pctx.restore();
     });
 
+    // Solo nome ambiente + m²: niente quote e niente controlli editor.
     var metricByRoom = new Map();
     (presentationModel.surfaces.roomMetrics || []).forEach(function (m) { metricByRoom.set(m.room.id, m); });
     presentationModel.rooms.forEach(function (room) {
