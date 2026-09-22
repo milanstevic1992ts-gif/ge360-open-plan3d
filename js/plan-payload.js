@@ -10,6 +10,7 @@
 
 import { summarizeConstruction } from './construction-quantities.js';
 
+export const TECHNICAL_SCHEMA = 'ge360-technical-plan-v1';
 export const PLAN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const WALL_REFERENCES = ['interior', 'partitionAxis', 'axis'];
 export const DEFAULT_WALL_THICKNESS_CM = 12;
@@ -147,6 +148,7 @@ export function buildPlanPayload(plan, extra = {}) {
   return Object.assign({
     version: 4,
     kind: 'ge360-rough-survey',
+    technicalSchema: TECHNICAL_SCHEMA,
     planId: safePlanId(plan.id),
     name: String(plan.name || 'Rilievo').slice(0, 200),
     updatedAt: plan.updatedAt || new Date().toISOString(),
@@ -167,6 +169,7 @@ export function buildPlanPayload(plan, extra = {}) {
 /** Impronta del contenuto geometrico: serve a capire se un risultato del server è ancora attuale. */
 export function payloadFingerprint(payload) {
   const core = JSON.stringify({
+    technicalSchema: payload.technicalSchema || TECHNICAL_SCHEMA,
     walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.constructionState, w.constructionThicknessCm, w.thicknessMm]),
     openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.windowKind, o.category, o.leaves, o.sliding, o.armored, o.balconyDoor, o.hingeEnd, o.swingDirection, o.swingSide, o.slideTo, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
     rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
