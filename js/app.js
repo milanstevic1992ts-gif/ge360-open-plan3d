@@ -1948,6 +1948,45 @@ import { createPdfReader } from './pdf-reader.js';
     opening.position = Math.max(.01, Math.min(.99, t));
   }
 
+  function updateCornerChoiceState(opening) {
+    var wrap = $('cornerChoiceWrap');
+    if (!wrap) return;
+    if (!opening || sheetType !== 'opening-offset') {
+      wrap.classList.add('hidden');
+      return;
+    }
+    var wall = openingWall(opening);
+    if (!wall) {
+      wrap.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    var leftEnd = wallEndForVisualSide(wall, 'left');
+    var rightEnd = wallEndForVisualSide(wall, 'right');
+    $('cornerLeftBtn').classList.toggle('active', opening.referenceEnd === leftEnd);
+    $('cornerRightBtn').classList.toggle('active', opening.referenceEnd === rightEnd);
+  }
+
+  function setOpeningReferenceVisual(side) {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening) return;
+    var wall = openingWall(opening);
+    if (!wall) return;
+    var nextEnd = wallEndForVisualSide(wall, side === 'right' ? 'right' : 'left');
+    if (opening.referenceEnd === nextEnd) {
+      updateCornerChoiceState(opening);
+      return;
+    }
+    var changed = offsetForReference(opening, wall.lengthCm, nextEnd);
+    Object.assign(opening, changed);
+    persistActive();
+    numberText = Number.isFinite(opening.offsetCm) ? metersText(opening.offsetCm) : '';
+    updateSheetValue();
+    updateCornerChoiceState(opening);
+    render();
+    vibrate(12);
+  }
+
   function toggleOpeningCorner() {
     var opening = openings.find(function (o) { return o.id === currentOpeningId; });
     if (!opening) return;
@@ -1993,12 +2032,12 @@ import { createPdfReader } from './pdf-reader.js';
         $('cornerToggleBtn').classList.add('hidden');
       } else if (type === 'opening-offset') {
         var side = openingReferenceLabel(o);
-        var otherSide = side === 'SINISTRO' ? 'DESTRO' : 'SINISTRO';
         $('sheetKicker').textContent = 'DA ANGOLO ' + side + ' → PRIMO BORDO ' + (o && o.type === 'door' ? 'PORTA' : 'FINESTRA');
-        $('cornerToggleBtn').classList.remove('hidden');
-        $('cornerToggleBtn').textContent = '↔ USA ANGOLO ' + otherSide;
+        $('cornerToggleBtn').classList.add('hidden');
+        updateCornerChoiceState(o);
       }
     }
+    if (type !== 'opening-offset') $('cornerChoiceWrap').classList.add('hidden');
     if (type === 'wall') $('cornerToggleBtn').classList.add('hidden');
     updateSheetValue();
   }
@@ -2007,6 +2046,7 @@ import { createPdfReader } from './pdf-reader.js';
     sheetType = null;
     $('sheetBackdrop').classList.add('hidden');
     $('cornerToggleBtn').classList.add('hidden');
+    $('cornerChoiceWrap').classList.add('hidden');
     $('deleteOpeningBtn').classList.add('hidden');
     numberText = '';
     updateSheetValue();
@@ -5887,6 +5927,8 @@ import { createPdfReader } from './pdf-reader.js';
   $('clearBtn').addEventListener('click', function () { runTool(clearAll); });
   $('confirmBtn').addEventListener('click', confirmSheet);
   $('laterBtn').addEventListener('click', later);
+  $('cornerLeftBtn').addEventListener('click', function () { setOpeningReferenceVisual('left'); });
+  $('cornerRightBtn').addEventListener('click', function () { setOpeningReferenceVisual('right'); });
   $('cornerToggleBtn').addEventListener('click', toggleOpeningCorner);
   $('deleteOpeningBtn').addEventListener('click', deleteCurrentOpening);
   $('zoomOutBtn').addEventListener('click', function () { setZoom(viewZoom / 1.25); });
