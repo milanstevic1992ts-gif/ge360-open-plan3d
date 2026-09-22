@@ -15,7 +15,7 @@
     </header>
     <div class="dash-actions">
       <button id="newPlanBtn" class="new-plan">＋ NUOVO RILIEVO</button>
-      <div id="serverBadge" class="server-badge offline">● Debian non collegato</div>
+      <button id="serverBadge" class="server-badge offline" type="button" aria-label="Apri diagnostica connessione">● Debian non collegato</button>
     </div>
     <main class="library-wrap">
       <div id="emptyLibrary" class="empty-library">
@@ -179,6 +179,74 @@
     </section>
   </div>
 
+  <div id="connectionDiagBackdrop" class="connection-diagnostic-backdrop hidden">
+    <section class="connection-diagnostic-card" aria-label="Diagnostica connessione GE360">
+      <header class="connection-diagnostic-head">
+        <button id="closeConnectionDiagBtn" class="icon-btn light" aria-label="Chiudi diagnostica">‹</button>
+        <div>
+          <div class="eyebrow dark">GE360 DIRECT BRIDGE</div>
+          <h2>Stato connessione</h2>
+          <p>Controllo reale tra telefono e server Debian</p>
+        </div>
+        <button id="runConnectionDiagBtn" class="diag-refresh-btn" type="button">RIPROVA</button>
+      </header>
+
+      <main class="connection-diagnostic-body">
+        <section id="diagOverall" class="diag-overall checking">
+          <div id="diagOverallIcon" class="diag-overall-icon">…</div>
+          <div>
+            <b id="diagOverallTitle">Controllo connessione…</b>
+            <span id="diagOverallText">Verifico tunnel, backend, API e PDF.</span>
+          </div>
+        </section>
+
+        <section class="diag-grid">
+          <article id="diagBridge" class="diag-row checking">
+            <span class="diag-dot"></span>
+            <div><b>Direct Bridge</b><small id="diagBridgeText">Controllo tunnel WireGuard…</small></div>
+            <strong id="diagBridgeValue">…</strong>
+          </article>
+          <article id="diagBackend" class="diag-row checking">
+            <span class="diag-dot"></span>
+            <div><b>Server Debian</b><small id="diagBackendText">Controllo /healthz…</small></div>
+            <strong id="diagBackendValue">…</strong>
+          </article>
+          <article id="diagAuth" class="diag-row checking">
+            <span class="diag-dot"></span>
+            <div><b>API Key</b><small id="diagAuthText">Controllo accesso autenticato…</small></div>
+            <strong id="diagAuthValue">…</strong>
+          </article>
+          <article id="diagApi" class="diag-row checking">
+            <span class="diag-dot"></span>
+            <div><b>API rilievi</b><small id="diagApiText">Controllo scambio dati JSON…</small></div>
+            <strong id="diagApiValue">…</strong>
+          </article>
+          <article id="diagPdf" class="diag-row checking">
+            <span class="diag-dot"></span>
+            <div><b>Canale PDF</b><small id="diagPdfText">Cerco un PDF recente da provare…</small></div>
+            <strong id="diagPdfValue">…</strong>
+          </article>
+        </section>
+
+        <section class="diag-tech">
+          <h3>Dettagli tecnici</h3>
+          <div><span>Backend</span><code id="diagServerUrl">—</code></div>
+          <div><span>VPN telefono</span><code id="diagBridgeAddress">—</code></div>
+          <div><span>Endpoint pubblico</span><code id="diagBridgeEndpoint">—</code></div>
+          <div><span>Latenza</span><code id="diagLatency">—</code></div>
+          <div><span>Ultimo test</span><code id="diagLastTest">—</code></div>
+        </section>
+
+        <div id="diagAdvice" class="diag-advice hidden"></div>
+
+        <div class="diag-actions">
+          <button id="diagReconnectBtn" class="secondary block" type="button">RICONNETTI BRIDGE</button>
+          <button id="diagSettingsBtn" class="primary block" type="button">IMPOSTAZIONI CONNESSIONE</button>
+        </div>
+      </main>
+    </section>
+  </div>
+
   <div id="settingsBackdrop" class="modal-backdrop hidden">
     <section class="settings-card">
       <div class="settings-head"><div><div class="eyebrow dark">GE360 DIRECT BRIDGE</div><h2>Collega il backend</h2></div><button id="closeSettingsBtn" class="round-btn light">✕</button></div>
@@ -213,6 +281,7 @@
       <label>Indirizzo server<input id="serverUrl" placeholder="http://10.88.0.1:9888/api/v1"></label>
       <label>API Key<input id="apiKey" type="password" placeholder="Incolla la chiave API"></label>
       <p class="security-note">Il profilo WireGuard resta nella memoria privata Android. La chiave API resta sul telefono e non viene salvata nella repo GitHub.</p>
+      <button id="openConnectionDiagBtn" class="connection-diagnostic-link" type="button">◉ APRI DIAGNOSTICA COMPLETA</button>
       <div class="settings-actions"><button id="testServerBtn" class="secondary block">TEST COLLEGAMENTO</button><button id="saveSettingsBtn" class="primary block">SALVA</button></div>
     </section>
   </div>
