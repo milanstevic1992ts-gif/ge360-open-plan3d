@@ -300,6 +300,7 @@ jobs:
           node scripts/test-offline-queue.mjs
           node scripts/test-opening-presets.mjs
           node scripts/test-wall-construction.mjs
+          node scripts/test-technical-contract.mjs
           node scripts/test-construction-quantities.mjs
           node scripts/test-construction-visuals.mjs
           node scripts/test-geometry-diagnostics.mjs
