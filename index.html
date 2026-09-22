@@ -47,6 +47,7 @@
       <div id="selectionBar" class="selection-bar hidden">
         <div class="selection-info"><b id="selectionLabel">ELEMENTO SELEZIONATO</b><small id="selectionHint">Trascina con un dito per spostare</small></div>
         <button id="editSelectedBtn" class="selection-edit" aria-label="Modifica elemento selezionato">MODIFICA</button>
+        <button id="wallStateBtn" class="selection-state hidden" aria-label="Stato costruttivo del muro">STATO</button>
         <button id="workSelectedBtn" class="selection-work" aria-label="Aggiungi lavorazioni all'elemento selezionato">LAVORI</button>
         <button id="deleteSelectedBtn" class="selection-delete" aria-label="Elimina elemento selezionato">🗑 ELIMINA</button>
         <button id="closeSelectionBtn" class="selection-close" aria-label="Deseleziona">✕</button>
@@ -134,6 +135,24 @@
       <button id="cornerToggleBtn" class="corner-toggle hidden">↔ CAMBIA ANGOLO</button>
       <button id="deleteOpeningBtn" class="delete-opening hidden">🗑 ELIMINA APERTURA</button>
       <div class="sheet-actions"><button id="laterBtn" class="secondary">DOPO</button><button id="confirmBtn" class="primary">CONFERMA ✓</button></div>
+    </section>
+  </div>
+
+  <div id="wallStateBackdrop" class="modal-backdrop hidden">
+    <section class="wall-state-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">MURO SELEZIONATO</div><h2>Stato del muro</h2></div>
+        <button id="closeWallStateBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <p class="wall-state-help">Definisci cosa deve succedere a questo muro. Lo spessore verrà chiesto solo quando serve davvero.</p>
+      <div class="wall-state-grid">
+        <button data-wall-state="existing"><b>━</b><span>ESISTENTE</span><small>Nessuna modifica</small></button>
+        <button data-wall-state="demolish"><b>╳</b><span>DA DEMOLIRE</span><small>Rimozione muro</small></button>
+        <button data-wall-state="new"><b>＋</b><span>NUOVO MURO</span><small>Nuova costruzione</small></button>
+        <button data-wall-state="close-opening"><b>▮</b><span>CHIUSURA APERTURA</span><small>Porta o vano da chiudere</small></button>
+        <button data-wall-state="new-opening"><b>▯</b><span>NUOVA APERTURA</span><small>Vano da realizzare</small></button>
+      </div>
+      <div id="wallStateSummary" class="wall-state-summary"></div>
     </section>
   </div>
 
