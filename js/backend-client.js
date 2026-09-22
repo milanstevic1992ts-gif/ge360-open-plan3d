@@ -109,12 +109,48 @@ export function createBackendClient({ baseUrl, apiKey, fetchImpl, timeoutMs = 15
     return Object.assign({ submission, job }, result);
   }
 
-  function downloadArtifact(planId, artifact, version = null) {
+  async function downloadArtifact(planId, artifact, version = null) {
     const id = encodeURIComponent(planId);
     const path = version == null
       ? '/plans/' + id + '/' + artifact
       : '/plans/' + id + '/versions/' + encodeURIComponent(version) + '/' + artifact;
-    return request(path, { as: 'blob', timeout: 30000 });
+
+    // I risultati JSON sono piccoli, mentre PDF/immagini possono attraversare il
+    // Direct Bridge su rete mobile. Non dichiarare il backend "offline" solo
+    // perché il trasferimento di un file supera i 30 secondi.
+    const timeout = artifact === 'pdf' ? 180000 : 90000;
+    let backendConfirmedOnline = false;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await request(path, { as: 'blob', timeout });
+      } catch (error) {
+        const retryable = error instanceof BackendError &&
+          (error.code === 'TIMEOUT' || error.code === 'NETWORK');
+
+        if (artifact === 'pdf' && retryable && attempt === 0) {
+          try {
+            await request('/health', { timeout: 8000 });
+            backendConfirmedOnline = true;
+            await sleep(350);
+            continue;
+          } catch (_) {
+            // Il probe usa lo stesso bridge: se fallisce davvero, manteniamo
+            // l'errore di rete originale.
+          }
+        }
+
+        if (artifact === 'pdf' && retryable && backendConfirmedOnline) {
+          throw new BackendError(
+            'Backend online, ma il download del PDF è stato interrotto. Riprova: il rilievo è già salvato sul server.',
+            { code: 'PDF_DOWNLOAD', detail: error }
+          );
+        }
+        throw error;
+      }
+    }
+
+    throw new BackendError('Download PDF non completato', { code: 'PDF_DOWNLOAD' });
   }
 
   async function listVersions(planId) {
