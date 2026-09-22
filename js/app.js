@@ -5457,15 +5457,61 @@ import { createPdfReader } from './pdf-reader.js';
         ctx.fillText('B', center.x - nx * 11, center.y - ny * 11);
       }
     } else {
-      // Finestra in pianta: due linee sottili parallele dentro il vano.
-      ctx.strokeStyle = active ? '#2563eb' : '#0891b2';
+      // Finestra / portafinestra tecnica.
+      var windowMeta = windowKindSpec(opening.windowKind || 'single', settings);
+      ctx.strokeStyle = active ? '#2563eb' : (windowMeta.balconyDoor ? '#15803d' : '#0891b2');
       ctx.lineWidth = 2;
-      [-2.8, 2.8].forEach(function (off) {
-        ctx.beginPath();
-        ctx.moveTo(a.x + nx * off, a.y + ny * off);
-        ctx.lineTo(b.x + nx * off, b.y + ny * off);
-        ctx.stroke();
-      });
+
+      if (windowMeta.sliding) {
+        // Due pannelli sovrapposti e frecce contrapposte.
+        [-3.4, 3.4].forEach(function (off, idx) {
+          var shrink = len * .18;
+          ctx.beginPath();
+          ctx.moveTo(a.x + ux * (idx ? shrink : 0) + nx * off, a.y + uy * (idx ? shrink : 0) + ny * off);
+          ctx.lineTo(b.x - ux * (idx ? 0 : shrink) + nx * off, b.y - uy * (idx ? 0 : shrink) + ny * off);
+          ctx.stroke();
+        });
+        ctx.lineWidth = 1.2;
+        [-1, 1].forEach(function (dir) {
+          var tx = center.x + ux * dir * 13;
+          var ty = center.y + uy * dir * 13;
+          ctx.beginPath();
+          ctx.moveTo(center.x, center.y);
+          ctx.lineTo(tx, ty);
+          ctx.lineTo(tx - ux * dir * 5 + uy * 3, ty - uy * dir * 5 - ux * 3);
+          ctx.moveTo(tx, ty);
+          ctx.lineTo(tx - ux * dir * 5 - uy * 3, ty - uy * dir * 5 + ux * 3);
+          ctx.stroke();
+        });
+      } else {
+        [-2.8, 2.8].forEach(function (off) {
+          ctx.beginPath();
+          ctx.moveTo(a.x + nx * off, a.y + ny * off);
+          ctx.lineTo(b.x + nx * off, b.y + ny * off);
+          ctx.stroke();
+        });
+
+        // Divisioni delle ante: 2 o 3 campi leggibili in pianta.
+        var leaves = Math.max(1, Number(windowMeta.leaves) || 1);
+        for (var wi = 1; wi < leaves; wi++) {
+          var ratio = wi / leaves;
+          var mx = a.x + (b.x - a.x) * ratio;
+          var my = a.y + (b.y - a.y) * ratio;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.moveTo(mx + nx * 5, my + ny * 5);
+          ctx.lineTo(mx - nx * 5, my - ny * 5);
+          ctx.stroke();
+        }
+      }
+
+      if (windowMeta.balconyDoor) {
+        ctx.fillStyle = active ? '#2563eb' : '#166534';
+        ctx.font = '1000 8px system-ui';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('PF', center.x - nx * 11, center.y - ny * 11);
+      }
     }
 
 
