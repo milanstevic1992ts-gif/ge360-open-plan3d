@@ -9,7 +9,7 @@ import { compactResult, humanizeText, questionAction, isResultStale, statusInfo,
 import { createOfflineQueue, isRetryableBackendError } from './offline-queue.js';
 import { savePhotoBlob, getPhotoBlob, deletePhotoBlob, targetKey as photoTargetKey } from './photo-store.js';
 import { laserAvailable, scanLaserDevices, connectLaserDevice, disconnectLaserDevice, restoreLaserDevice, listenLaser } from './laser-client.js';
-import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForReference } from './opening-presets.js';
+import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForReference, doorPresetKeys, doorKindSpec, applyDoorKind, normalizeDoorKind } from './opening-presets.js';
 import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loadWorkUsage, recordWorkUse, searchWorkCatalog } from './work-catalog.js';
 import { createPdfReader } from './pdf-reader.js';
 
@@ -1490,28 +1490,58 @@ import { createPdfReader } from './pdf-reader.js';
     }
   }
 
+  function preferredDoorPreset(kind) {
+    var normalized = normalizeDoorKind(kind);
+    if (normalized === 'double' || normalized === 'armored-double') return '140';
+    if (normalized === 'armored') return '90';
+    return '80';
+  }
+
   function placeOpening(p) {
     var existing = nearestOpening(p);
     if (existing) return editOpening(existing.opening);
     var hit = nearestWall(p);
     if (!hit) return toast('Tocca più vicino a un muro');
 
-    var lastKey = mode === 'door' ? (settings.lastDoorPreset || '80') : (settings.lastWindowPreset || 'single');
-    var initial = openingPresetSpec(mode, lastKey, settings) ||
-      openingPresetSpec(mode, mode === 'door' ? '80' : 'single', settings);
+    var initial;
+    var lastKey;
+    var doorKind = null;
+
+    if (mode === 'door') {
+      doorKind = normalizeDoorKind(settings.lastDoorKind || 'internal');
+      lastKey = settings.lastDoorPreset || preferredDoorPreset(doorKind);
+      initial = openingPresetSpec('door', lastKey, settings, { doorKind: doorKind }) ||
+        openingPresetSpec('door', preferredDoorPreset(doorKind), settings, { doorKind: doorKind }) ||
+        openingPresetSpec('door', doorPresetKeys(doorKind)[0], settings, { doorKind: doorKind });
+    } else {
+      lastKey = settings.lastWindowPreset || 'single';
+      initial = openingPresetSpec('window', lastKey, settings) ||
+        openingPresetSpec('window', 'single', settings);
+    }
+
     checkpoint();
     var opening = {
       id: uid(mode === 'door' ? 'd' : 'f'),
       type: mode,
       wallId: hit.wall.id,
       position: Math.max(.02, Math.min(.98, hit.t)),
-      widthCm: initial ? initial.widthCm : (mode === 'door' ? 80 : 80),
+      widthCm: initial ? initial.widthCm : 80,
       heightCm: initial ? initial.heightCm : (mode === 'door' ? 210 : 120),
       referenceEnd: hit.t <= 0.5 ? 'a' : 'b',
       offsetCm: null,
       presetKey: null
     };
-    if (mode === 'window') opening.sillHeightCm = initial ? initial.sillHeightCm : 90;
+
+    if (mode === 'door') {
+      opening = applyDoorKind(opening, doorKind);
+      if (initial) {
+        opening.widthCm = initial.widthCm;
+        opening.heightCm = initial.heightCm;
+      }
+    } else {
+      opening.sillHeightCm = initial ? initial.sillHeightCm : 90;
+    }
+
     openings.push(opening);
     openOpeningQuick(opening, true);
     render();
@@ -1533,41 +1563,119 @@ import { createPdfReader } from './pdf-reader.js';
     return Math.round(value * 10) / 10;
   }
 
+  function renderDoorPresetButtons(opening) {
+    var wrap = $('doorPresetWrap');
+    if (!wrap || !opening || opening.type !== 'door') return;
+    var kind = normalizeDoorKind(opening.doorKind || 'internal');
+    var active = openingQuickIsNew ? null : detectOpeningPreset(opening, settings);
+    var last = settings.lastDoorKind === kind ? settings.lastDoorPreset : null;
+    wrap.innerHTML = '';
+
+    doorPresetKeys(kind).forEach(function (key) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.openingPreset = key;
+      if (key === active) button.classList.add('active');
+      if (key === last) button.classList.add('last-used');
+      button.innerHTML = '<b>' + key + '</b><small>cm</small>';
+      wrap.appendChild(button);
+    });
+
+    var custom = document.createElement('button');
+    custom.type = 'button';
+    custom.dataset.openingPreset = 'custom';
+    custom.className = 'custom' + (active === 'custom' ? ' active' : '');
+    custom.innerHTML = '<b>✎</b><small>PERSONALIZZATA</small>';
+    wrap.appendChild(custom);
+
+    document.querySelectorAll('#doorTypeWrap [data-door-kind]').forEach(function (button) {
+      button.classList.toggle('active', button.dataset.doorKind === kind);
+    });
+  }
+
+  function setDoorKind(kind) {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening || opening.type !== 'door') return;
+    var normalized = normalizeDoorKind(kind);
+    var before = clone(opening);
+    var next = applyDoorKind(opening, normalized);
+    var preferred = settings.lastDoorKind === normalized && settings.lastDoorPreset
+      ? settings.lastDoorPreset
+      : preferredDoorPreset(normalized);
+    var spec = openingPresetSpec('door', preferred, settings, { doorKind: normalized }) ||
+      openingPresetSpec('door', preferredDoorPreset(normalized), settings, { doorKind: normalized }) ||
+      openingPresetSpec('door', doorPresetKeys(normalized)[0], settings, { doorKind: normalized });
+
+    if (spec) {
+      next.widthCm = spec.widthCm;
+      next.heightCm = spec.heightCm;
+      next.presetKey = spec.key;
+    }
+    var wall = openingWall(opening);
+    var fit = fitOpeningToWall(next, wall && wall.lengthCm);
+    if (!fit.fits) {
+      Object.assign(opening, before);
+      return toast('Questo tipo di porta non entra nel muro');
+    }
+    Object.assign(opening, fit.opening);
+    renderOpeningQuick();
+    render();
+    vibrate(12);
+  }
+
   function renderOpeningQuick() {
     var opening = openings.find(function (o) { return o.id === currentOpeningId; });
     if (!opening) return;
     var isDoor = opening.type === 'door';
-    $('openingQuickTitle').textContent = isDoor ? 'Porta' : 'Finestra';
+
+    if (isDoor) {
+      opening.doorKind = normalizeDoorKind(opening.doorKind || (opening.armored ? 'armored' : 'internal'));
+      var doorMeta = doorKindSpec(opening.doorKind);
+      opening.category = doorMeta.armored ? 'armored' : 'interior';
+      opening.leaves = doorMeta.leaves;
+      opening.sliding = doorMeta.sliding;
+      opening.armored = doorMeta.armored;
+      $('openingQuickTitle').textContent = doorMeta.label;
+    } else {
+      $('openingQuickTitle').textContent = 'Finestra';
+    }
+
     $('openingQuickHint').textContent = isDoor
-      ? 'Scegli la larghezza. Subito dopo scegli l’angolo e la distanza fino al bordo della porta.'
+      ? 'Scegli il tipo e la misura. Subito dopo scegli l’angolo e la distanza fino al bordo della porta.'
       : 'Scegli il tipo. Subito dopo scegli l’angolo e la distanza fino al bordo della finestra.';
+
+    $('doorTypeWrap').classList.toggle('hidden', !isDoor);
     $('doorPresetWrap').classList.toggle('hidden', !isDoor);
     $('windowPresetWrap').classList.toggle('hidden', isDoor);
     $('openingAdvancedSillRow').classList.toggle('hidden', isDoor);
     $('deleteOpeningQuickBtn').classList.toggle('hidden', openingQuickIsNew);
+
+    if (isDoor) renderDoorPresetButtons(opening);
 
     var single = openingPresetSpec('window', 'single', settings);
     var double = openingPresetSpec('window', 'double', settings);
     $('singleWindowSize').textContent = single ? openingCmText(single.widthCm) + '×' + openingCmText(single.heightCm) + ' cm' : '';
     $('doubleWindowSize').textContent = double ? openingCmText(double.widthCm) + '×' + openingCmText(double.heightCm) + ' cm' : '';
 
-    var active = openingQuickIsNew ? null : detectOpeningPreset(opening, settings);
-    var last = isDoor ? settings.lastDoorPreset : settings.lastWindowPreset;
-    document.querySelectorAll('#openingQuickBackdrop [data-opening-preset]').forEach(function (button) {
-      var visibleGroup = button.closest('#doorPresetWrap') ? isDoor : !isDoor;
-      var key = button.dataset.openingPreset;
-      button.classList.toggle('active', visibleGroup && key === active);
-      button.classList.toggle('last-used', visibleGroup && key === last);
-    });
+    if (!isDoor) {
+      var active = openingQuickIsNew ? null : detectOpeningPreset(opening, settings);
+      var last = settings.lastWindowPreset;
+      document.querySelectorAll('#windowPresetWrap [data-opening-preset]').forEach(function (button) {
+        var key = button.dataset.openingPreset;
+        button.classList.toggle('active', key === active);
+        button.classList.toggle('last-used', key === last);
+      });
+    }
 
     var wall = openingWall(opening);
     var side = openingReferenceLabel(opening);
     var pos = Number.isFinite(opening.offsetCm)
       ? openingCmText(opening.offsetCm) + ' cm dal lato ' + side.toLowerCase()
       : 'posizione dal punto toccato';
+    var label = isDoor ? doorKindSpec(opening.doorKind).label : 'Finestra';
     $('openingPresetMeta').textContent =
-      (isDoor ? 'Porta' : 'Finestra') + ' · ' +
-      openingCmText(opening.widthCm) + ' cm · ' + pos;
+      label + ' · ' + openingCmText(opening.widthCm) + '×' +
+      openingCmText(opening.heightCm) + ' cm · ' + pos;
 
     $('openingAdvancedWidth').value = openingCmText(opening.widthCm);
     $('openingAdvancedHeight').value = openingCmText(
@@ -1578,11 +1686,9 @@ import { createPdfReader } from './pdf-reader.js';
     );
     $('openingAdvancedOffset').value = Number.isFinite(opening.offsetCm) ? openingCmText(opening.offsetCm) : '';
     $('openingReferenceBtn').textContent = '↔ ORA MISURO DAL LATO ' + side + ' · CAMBIA LATO';
-    if (!wall || !Number.isFinite(wall.lengthCm)) {
-      $('openingAdvancedOffset').placeholder = 'da posizione schizzo';
-    } else {
-      $('openingAdvancedOffset').placeholder = 'automatica';
-    }
+    $('openingAdvancedOffset').placeholder = (!wall || !Number.isFinite(wall.lengthCm))
+      ? 'da posizione schizzo'
+      : 'automatica';
   }
 
   function openOpeningQuick(opening, isNew) {
@@ -1649,8 +1755,12 @@ import { createPdfReader } from './pdf-reader.js';
     var key = detectOpeningPreset(opening, settings);
     opening.presetKey = key || 'custom';
     if (opening.type === 'door') {
-      settings.doorHeightCm = Number(opening.heightCm) || Number(settings.doorHeightCm) || 210;
-      settings.lastDoorPreset = ['60','70','80'].includes(String(key)) ? String(key) : 'custom';
+      var kind = normalizeDoorKind(opening.doorKind || 'internal');
+      var meta = doorKindSpec(kind);
+      settings.lastDoorKind = kind;
+      settings.lastDoorPreset = doorPresetKeys(kind).includes(String(key)) ? String(key) : 'custom';
+      if (meta.armored) settings.armoredDoorHeightCm = Number(opening.heightCm) || Number(settings.armoredDoorHeightCm) || 210;
+      else settings.doorHeightCm = Number(opening.heightCm) || Number(settings.doorHeightCm) || 210;
     } else {
       settings.lastWindowPreset = key === 'single' || key === 'double' ? key : 'custom';
     }
@@ -1703,7 +1813,9 @@ import { createPdfReader } from './pdf-reader.js';
       return;
     }
 
-    var spec = openingPresetSpec(opening.type, key, settings);
+    var spec = openingPresetSpec(opening.type, key, settings, {
+      doorKind: opening.type === 'door' ? opening.doorKind : null
+    });
     if (!spec) return;
     var wall = openingWall(opening);
     var next = Object.assign({}, opening, {
@@ -1711,6 +1823,7 @@ import { createPdfReader } from './pdf-reader.js';
       heightCm: spec.heightCm,
       presetKey: key
     });
+    if (opening.type === 'door') next = applyDoorKind(next, spec.doorKind || opening.doorKind);
     if (opening.type === 'window') next.sillHeightCm = spec.sillHeightCm;
     var fit = fitOpeningToWall(next, wall && wall.lengthCm);
     if (!fit.fits) return toast('Questa apertura è più larga del muro');
@@ -1760,8 +1873,12 @@ import { createPdfReader } from './pdf-reader.js';
     var key = detectOpeningPreset(opening, settings);
     opening.presetKey = key || 'custom';
     if (opening.type === 'door') {
-      settings.doorHeightCm = height;
-      settings.lastDoorPreset = ['60','70','80'].includes(String(key)) ? String(key) : 'custom';
+      var doorKind = normalizeDoorKind(opening.doorKind || 'internal');
+      var doorMeta = doorKindSpec(doorKind);
+      settings.lastDoorKind = doorKind;
+      settings.lastDoorPreset = doorPresetKeys(doorKind).includes(String(key)) ? String(key) : 'custom';
+      if (doorMeta.armored) settings.armoredDoorHeightCm = height;
+      else settings.doorHeightCm = height;
     } else if (key === 'single') {
       settings.windowSingleWidthCm = width;
       settings.windowSingleHeightCm = height;
@@ -5542,9 +5659,17 @@ import { createPdfReader } from './pdf-reader.js';
   $('worksProcessBtn').addEventListener('click', processFromWorks);
   $('workSearchInput').addEventListener('input', renderWorkSuggestions);
   $('closeOpeningQuickBtn').addEventListener('click', function () { closeOpeningQuick(true); });
-  $('openingQuickBackdrop').addEventListener('click', function (e) { if (e.target === $('openingQuickBackdrop')) closeOpeningQuick(true); });
-  document.querySelectorAll('#openingQuickBackdrop [data-opening-preset]').forEach(function (button) {
-    button.addEventListener('click', function () { applyOpeningPreset(button.dataset.openingPreset); });
+  $('openingQuickBackdrop').addEventListener('click', function (e) {
+    if (e.target === $('openingQuickBackdrop')) return closeOpeningQuick(true);
+    var kindButton = e.target.closest && e.target.closest('[data-door-kind]');
+    if (kindButton && $('doorTypeWrap').contains(kindButton)) {
+      setDoorKind(kindButton.dataset.doorKind);
+      return;
+    }
+    var presetButton = e.target.closest && e.target.closest('[data-opening-preset]');
+    if (presetButton && $('openingQuickBackdrop').contains(presetButton)) {
+      applyOpeningPreset(presetButton.dataset.openingPreset);
+    }
   });
   $('openingReferenceBtn').addEventListener('click', toggleOpeningAdvancedReference);
   $('saveOpeningAdvancedBtn').addEventListener('click', saveOpeningAdvanced);
