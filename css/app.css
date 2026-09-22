@@ -578,3 +578,17 @@
 .wall-state-card>.primary{margin-top:10px}
 .wall-state-summary{margin-top:10px;padding:10px 12px;border-radius:12px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:900}
 @media(max-width:390px){.wall-state-grid{grid-template-columns:1fr 1fr}.wall-state-grid button{min-height:72px}}
+
+.room-card{width:100%;max-width:560px;max-height:90dvh;overflow:auto;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.3)}
+.room-card .settings-head p{margin:2px 0 0;color:#64748b;font-size:9px;font-weight:800}
+.room-card-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.room-card-metric{padding:11px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0}
+.room-card-metric span{display:block;font-size:8px;font-weight:900;color:#64748b}
+.room-card-metric b{display:block;margin-top:3px;font-size:15px;color:#0f172a}
+.room-card-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px}
+.room-card-count{padding:9px 5px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;text-align:center}
+.room-card-count b{display:block;font-size:14px;color:#1d4ed8}
+.room-card-count span{display:block;margin-top:2px;font-size:7px;font-weight:900;color:#64748b}
+.room-card-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.room-card-actions button{min-height:46px;border-radius:13px;font-size:9px;font-weight:1000}
+@media(max-width:390px){.room-card-counts{grid-template-columns:repeat(2,1fr)}.room-card-actions{grid-template-columns:1fr}}
