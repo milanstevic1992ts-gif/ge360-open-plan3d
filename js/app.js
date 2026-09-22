@@ -425,15 +425,18 @@ import { constructionVisual, activeConstructionStates } from './construction-vis
     var ox = (rect.width - bw * scale) / 2 - minX * scale;
     var oy = (rect.height - bh * scale) / 2 - minY * scale;
 
-    pctx.strokeStyle = '#0f172a';
-    pctx.lineWidth = 5;
     pctx.lineCap = 'round';
     ws.forEach(function (w) {
+      var visual = constructionVisual(w && w.constructionState);
+      pctx.strokeStyle = visual.stroke;
+      pctx.lineWidth = visual.state === 'new' || visual.state === 'close-opening' ? 5.5 : 4.5;
+      pctx.setLineDash((visual.dash || []).map(function (v) { return Math.max(1, v * .65); }));
       pctx.beginPath();
       pctx.moveTo(w.a.x * scale + ox, w.a.y * scale + oy);
       pctx.lineTo(w.b.x * scale + ox, w.b.y * scale + oy);
       pctx.stroke();
     });
+    pctx.setLineDash([]);
   }
 
   function geometrySnapshot() {
