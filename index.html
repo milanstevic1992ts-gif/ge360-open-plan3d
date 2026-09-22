@@ -152,7 +152,25 @@
         <button data-wall-state="close-opening"><b>▮</b><span>CHIUSURA APERTURA</span><small>Porta o vano da chiudere</small></button>
         <button data-wall-state="new-opening"><b>▯</b><span>NUOVA APERTURA</span><small>Vano da realizzare</small></button>
       </div>
+      <div id="wallThicknessPanel" class="wall-thickness-panel hidden">
+        <div class="wall-thickness-head">
+          <b>Spessore muro</b>
+          <small>Obbligatorio solo per demolizione o nuovo muro</small>
+        </div>
+        <div class="wall-thickness-presets">
+          <button type="button" data-wall-thickness="8">8 cm</button>
+          <button type="button" data-wall-thickness="10">10 cm</button>
+          <button type="button" data-wall-thickness="12">12 cm</button>
+          <button type="button" data-wall-thickness="15">15 cm</button>
+          <button type="button" data-wall-thickness="20">20 cm</button>
+          <button type="button" data-wall-thickness="25">25 cm</button>
+        </div>
+        <label class="wall-thickness-custom">Personalizzato
+          <div class="rect-room-input"><input id="wallThicknessCustom" inputmode="decimal" placeholder="es. 13,5"><span>cm</span></div>
+        </label>
+      </div>
       <div id="wallStateSummary" class="wall-state-summary"></div>
+      <button id="saveWallStateBtn" class="primary block">CONFERMA STATO ✓</button>
     </section>
   </div>
 
