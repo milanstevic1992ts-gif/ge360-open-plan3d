@@ -33,6 +33,7 @@ jobs:
           node --check js/laser-client.js
           node --check js/opening-presets.js
           node --check js/work-catalog.js
+          node --check js/construction-quantities.js
           node --check /tmp/ge360-app.mjs
           node --check /tmp/room-surfaces.mjs
           node --check /tmp/sketch-snap.mjs
@@ -296,6 +297,7 @@ jobs:
           node scripts/test-offline-queue.mjs
           node scripts/test-opening-presets.mjs
           node scripts/test-wall-construction.mjs
+          node scripts/test-construction-quantities.mjs
           node scripts/test-work-catalog.mjs
           grep -q "buildPlanPayload" js/app.js
           grep -q "processPlan" js/app.js
