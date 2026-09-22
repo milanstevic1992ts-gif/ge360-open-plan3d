@@ -94,6 +94,15 @@ export function buildPlanPayload(plan, extra = {}) {
         out.swingSide = Number(out.swingSide) === -1 ? -1 : 1;
         delete out.slideTo;
       }
+    } else if (o.type === 'window') {
+      const allowedWindowKinds = ['single', 'double', 'triple', 'sliding', 'balcony', 'balcony-double'];
+      const fallbackWindowKind = Number(o.leaves) === 3 ? 'triple' : Number(o.leaves) === 2 ? 'double' : 'single';
+      out.windowKind = allowedWindowKinds.includes(String(o.windowKind)) ? String(o.windowKind) : fallbackWindowKind;
+      out.sliding = out.windowKind === 'sliding';
+      out.balconyDoor = out.windowKind === 'balcony' || out.windowKind === 'balcony-double';
+      out.leaves = out.windowKind === 'triple' ? 3 :
+        (out.windowKind === 'double' || out.windowKind === 'sliding' || out.windowKind === 'balcony-double' ? 2 : 1);
+      if (out.balconyDoor) out.sillHeightCm = 0;
     }
     return out;
   });
@@ -137,7 +146,7 @@ export function buildPlanPayload(plan, extra = {}) {
 export function payloadFingerprint(payload) {
   const core = JSON.stringify({
     walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.thicknessMm]),
-    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.category, o.leaves, o.sliding, o.armored, o.hingeEnd, o.swingDirection, o.swingSide, o.slideTo, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
+    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.windowKind, o.category, o.leaves, o.sliding, o.armored, o.balconyDoor, o.hingeEnd, o.swingDirection, o.swingSide, o.slideTo, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
     rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
     diagonals: payload.diagonals,
     h: payload.wallHeightM,
