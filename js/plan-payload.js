@@ -67,6 +67,10 @@ export function buildPlanPayload(plan, extra = {}) {
   const walls = (plan.walls || []).map(w => {
     const out = Object.assign({}, w);
     out.lengthCm = positive(w.lengthCm);
+    const allowedStates = ['existing', 'demolish', 'new', 'close-opening', 'new-opening'];
+    out.constructionState = allowedStates.includes(String(w.constructionState))
+      ? String(w.constructionState)
+      : 'existing';
     if (!positive(out.thicknessMm)) out.thicknessMm = Math.round(thicknessCm * 10);
     return out;
   });
@@ -145,7 +149,7 @@ export function buildPlanPayload(plan, extra = {}) {
 /** Impronta del contenuto geometrico: serve a capire se un risultato del server è ancora attuale. */
 export function payloadFingerprint(payload) {
   const core = JSON.stringify({
-    walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.thicknessMm]),
+    walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.constructionState, w.thicknessMm]),
     openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.windowKind, o.category, o.leaves, o.sliding, o.armored, o.balconyDoor, o.hingeEnd, o.swingDirection, o.swingSide, o.slideTo, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
     rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
     diagonals: payload.diagonals,
