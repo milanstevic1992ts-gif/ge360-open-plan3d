@@ -261,6 +261,7 @@ jobs:
           grep -q "function editWallMeasurement" js/app.js
           grep -q "function editOpening" js/app.js
           grep -q "function renderPresentation" js/app.js
+          node scripts/test-clean-plan.mjs
 
       - name: Check DOM ids and module packaging
         run: |
