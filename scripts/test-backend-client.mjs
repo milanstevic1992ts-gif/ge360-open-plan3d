@@ -30,7 +30,7 @@ assert.equal(payload.planId, 'plan-lz3k2-ab12c');
 assert.equal(payload.walls[0].lengthCm, 200.5, 'precisione al millimetro');
 assert.equal(payload.walls[2].lengthCm, null, 'muro non misurato -> null');
 assert.equal(payload.walls[3].lengthCm, null, 'lunghezza 0 non deve arrivare al backend (422)');
-assert.equal(payload.walls[0].thicknessMm, 100);
+assert.equal(payload.walls[0].thicknessMm, undefined, 'un muro esistente non deve inventare lo spessore');
 assert.equal(payload.wallReference, 'partitionAxis');
 assert.equal(payload.openings[0].sillHeightCm, undefined, 'le porte non hanno davanzale');
 assert.equal(payload.openings[1].offsetCm, null);
