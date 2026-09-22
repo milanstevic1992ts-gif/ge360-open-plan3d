@@ -7,7 +7,10 @@ import {
   doorPresetKeys,
   doorKindSpec,
   applyDoorKind,
-  normalizeDoorKind
+  normalizeDoorKind,
+  normalizeWindowKind,
+  windowKindSpec,
+  applyWindowKind
 } from '../js/opening-presets.js';
 
 const d80=openingPresetSpec('door','80',{}, {doorKind:'internal'});
@@ -43,6 +46,28 @@ assert.equal(converted.armored,true);
 assert.equal(converted.leaves,2);
 
 const single=openingPresetSpec('window','single',{});
+assert.equal(single.windowKind,'single');
+assert.equal(single.leaves,1);
+assert.equal(single.sliding,false);
+
+const triple=openingPresetSpec('window','triple',{});
+assert.deepEqual([triple.widthCm,triple.heightCm,triple.sillHeightCm,triple.leaves],[210,120,90,3]);
+
+const slidingWindow=openingPresetSpec('window','sliding',{});
+assert.equal(slidingWindow.sliding,true);
+assert.equal(slidingWindow.leaves,2);
+
+const balcony=openingPresetSpec('window','balcony',{});
+assert.deepEqual([balcony.widthCm,balcony.heightCm,balcony.sillHeightCm,balcony.balconyDoor],[80,210,0,true]);
+
+const balconyDouble=windowKindSpec('balcony-double',{});
+assert.deepEqual([balconyDouble.widthCm,balconyDouble.heightCm,balconyDouble.leaves,balconyDouble.balconyDoor],[140,210,2,true]);
+assert.equal(normalizeWindowKind('nonsense'),'single');
+
+const changedWindow=applyWindowKind({type:'window'},'triple',{});
+assert.equal(changedWindow.windowKind,'triple');
+assert.equal(changedWindow.leaves,3);
+
 assert.deepEqual(
   [single.widthCm,single.heightCm,single.sillHeightCm],
   [80,120,90]
