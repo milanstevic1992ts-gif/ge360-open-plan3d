@@ -91,6 +91,7 @@ import { createPdfReader } from './pdf-reader.js';
   var openingQuickIsNew = false;
   var openingQuickOriginal = null;
   var openingCustomFlow = false;
+  var openingPositionFlow = false;
   var resultHighlightWallIds = [];
   var pdfArchivePlanId = null;
   var pdfReader = null;
@@ -984,6 +985,7 @@ import { createPdfReader } from './pdf-reader.js';
     openingQuickIsNew = false;
     openingQuickOriginal = null;
     openingCustomFlow = false;
+    openingPositionFlow = false;
     updateUI();
     render();
     toast((label === 'porta' ? 'Porta' : 'Finestra') + ' eliminata');
@@ -1448,9 +1450,9 @@ import { createPdfReader } from './pdf-reader.js';
         : next === 'select'
           ? 'Tocca una stanza o un muro; trascina per spostare'
           : next === 'door'
-            ? 'Tocca un muro o una porta esistente'
+            ? 'Tocca il muro nel punto della porta'
             : next === 'window'
-              ? 'Tocca un muro o una finestra esistente'
+              ? 'Tocca il muro nel punto della finestra'
               : next === 'quote'
                 ? 'Tocca il primo angolo (o una quota esistente)'
                 : 'Tocca il muro da modificare';
@@ -1507,8 +1509,8 @@ import { createPdfReader } from './pdf-reader.js';
     var isDoor = opening.type === 'door';
     $('openingQuickTitle').textContent = isDoor ? 'Porta' : 'Finestra';
     $('openingQuickHint').textContent = isDoor
-      ? 'Scegli 60, 70, 80 cm oppure Personalizzata. La posizione è già presa dal punto toccato.'
-      : 'Scegli Singola, Doppia oppure Personalizzata. Altezza e davanzale usano i preset salvati.';
+      ? 'Scegli la larghezza. Subito dopo scegli l’angolo e la distanza fino al bordo della porta.'
+      : 'Scegli il tipo. Subito dopo scegli l’angolo e la distanza fino al bordo della finestra.';
     $('doorPresetWrap').classList.toggle('hidden', !isDoor);
     $('windowPresetWrap').classList.toggle('hidden', isDoor);
     $('openingAdvancedSillRow').classList.toggle('hidden', isDoor);
@@ -1579,7 +1581,84 @@ import { createPdfReader } from './pdf-reader.js';
     }
     openingQuickIsNew = false;
     openingQuickOriginal = null;
+    openingPositionFlow = false;
     if (!openingCustomFlow) currentOpeningId = null;
+  }
+
+  function suggestedOpeningOffset(opening, wall) {
+    if (!opening || !wall || !Number.isFinite(wall.lengthCm) || wall.lengthCm <= 0 ||
+        !Number.isFinite(opening.widthCm)) return null;
+    var centerCm = Math.max(0, Math.min(wall.lengthCm, (Number(opening.position) || 0.5) * wall.lengthCm));
+    var fromA = centerCm - opening.widthCm / 2;
+    var fromB = wall.lengthCm - centerCm - opening.widthCm / 2;
+    var value = opening.referenceEnd === 'b' ? fromB : fromA;
+    return Math.max(0, Math.min(wall.lengthCm - opening.widthCm, value));
+  }
+
+  function startOpeningPositionFromCorner(opening) {
+    if (!opening) return;
+    var wall = openingWall(opening);
+    var suggested = Number.isFinite(opening.offsetCm)
+      ? opening.offsetCm
+      : suggestedOpeningOffset(opening, wall);
+    if (Number.isFinite(suggested)) {
+      opening.offsetCm = Math.round(suggested * 10) / 10;
+      recalcOpeningPosition(opening);
+    }
+    openingPositionFlow = true;
+    openingCustomFlow = false;
+    $('openingQuickBackdrop').classList.add('hidden');
+    numberText = Number.isFinite(opening.offsetCm) ? metersText(opening.offsetCm) : '';
+    openSheet('opening-offset');
+    render();
+    toast('Scegli l’angolo e misura fino al bordo dell’apertura');
+  }
+
+  function finalizeOpeningPositionFlow(opening) {
+    if (!opening) return;
+    var key = detectOpeningPreset(opening, settings);
+    opening.presetKey = key || 'custom';
+    if (opening.type === 'door') {
+      settings.doorHeightCm = Number(opening.heightCm) || Number(settings.doorHeightCm) || 210;
+      settings.lastDoorPreset = ['60','70','80'].includes(String(key)) ? String(key) : 'custom';
+    } else {
+      settings.lastWindowPreset = key === 'single' || key === 'double' ? key : 'custom';
+    }
+    persistSettings();
+    surfaceCache = null;
+    persistActive();
+    openingPositionFlow = false;
+    openingCustomFlow = false;
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    currentOpeningId = null;
+    closeSheet();
+    updateUI();
+    render();
+    vibrate(22);
+    toast((opening.type === 'door' ? 'Porta' : 'Finestra') + ' posizionata da angolo ✓');
+  }
+
+  function cancelOpeningPositionFlow() {
+    if (!openingPositionFlow) return false;
+    var id = currentOpeningId;
+    if (openingQuickIsNew) {
+      openings = openings.filter(function (o) { return o.id !== id; });
+    } else if (openingQuickOriginal) {
+      var current = openings.find(function (o) { return o.id === id; });
+      if (current) Object.assign(current, clone(openingQuickOriginal));
+    }
+    openingPositionFlow = false;
+    openingCustomFlow = false;
+    openingQuickIsNew = false;
+    openingQuickOriginal = null;
+    currentOpeningId = null;
+    surfaceCache = null;
+    persistActive();
+    closeSheet();
+    render();
+    toast('Posizionamento annullato');
+    return true;
   }
 
   function applyOpeningPreset(key) {
@@ -1590,7 +1669,7 @@ import { createPdfReader } from './pdf-reader.js';
       $('openingQuickBackdrop').classList.add('hidden');
       numberText = Number.isFinite(opening.widthCm) ? metersText(opening.widthCm) : '';
       openSheet('opening-width');
-      toast('Inserisci solo la larghezza · il laser può compilarla');
+      toast('Inserisci la larghezza; dopo scegli l’angolo di riferimento');
       return;
     }
 
@@ -1608,19 +1687,7 @@ import { createPdfReader } from './pdf-reader.js';
 
     if (!openingQuickIsNew) checkpoint();
     Object.assign(opening, fit.opening);
-    if (opening.type === 'door') settings.lastDoorPreset = key;
-    else settings.lastWindowPreset = key;
-    persistSettings();
-    surfaceCache = null;
-    persistActive();
-    openingQuickIsNew = false;
-    openingQuickOriginal = null;
-    currentOpeningId = null;
-    $('openingQuickBackdrop').classList.add('hidden');
-    updateUI();
-    render();
-    vibrate(22);
-    toast((opening.type === 'door' ? 'Porta ' + key + ' cm' : 'Finestra ' + (key === 'single' ? 'singola' : 'doppia')) + ' inserita ✓');
+    startOpeningPositionFromCorner(opening);
   }
 
   function toggleOpeningAdvancedReference() {
@@ -1773,7 +1840,7 @@ import { createPdfReader } from './pdf-reader.js';
       } else if (type === 'opening-offset') {
         var side = openingReferenceLabel(o);
         var otherSide = side === 'SINISTRO' ? 'DESTRO' : 'SINISTRO';
-        $('sheetKicker').textContent = 'DISTANZA ANGOLO ' + side + ' → BORDO ' + (o && o.type === 'door' ? 'PORTA' : 'FINESTRA');
+        $('sheetKicker').textContent = 'DA ANGOLO ' + side + ' → PRIMO BORDO ' + (o && o.type === 'door' ? 'PORTA' : 'FINESTRA');
         $('cornerToggleBtn').classList.remove('hidden');
         $('cornerToggleBtn').textContent = '↔ USA ANGOLO ' + otherSide;
       }
@@ -1848,18 +1915,9 @@ import { createPdfReader } from './pdf-reader.js';
       }
       surfaceCache = null;
       if (openingCustomFlow) {
-        if (op && op.type === 'door') settings.lastDoorPreset = 'custom';
-        if (op && op.type === 'window') settings.lastWindowPreset = 'custom';
-        persistSettings();
         persistActive();
         openingCustomFlow = false;
-        openingQuickIsNew = false;
-        openingQuickOriginal = null;
-        currentOpeningId = null;
-        closeSheet();
-        updateUI();
-        render();
-        toast('Misura personalizzata salvata ✓');
+        startOpeningPositionFromCorner(op);
         return;
       }
       persistActive();
@@ -1884,6 +1942,10 @@ import { createPdfReader } from './pdf-reader.js';
         surfaceCache = null;
       }
       persistActive();
+      if (op2 && openingPositionFlow) {
+        finalizeOpeningPositionFlow(op2);
+        return;
+      }
       if (op2) {
         numberText = metersText(Number.isFinite(op2.heightCm) ? op2.heightCm : (op2.type === 'door' ? 210 : 120));
         openSheet('opening-height');
@@ -1920,6 +1982,7 @@ import { createPdfReader } from './pdf-reader.js';
   }
 
   function later() {
+    if (openingPositionFlow && sheetType === 'opening-offset') return cancelOpeningPositionFlow();
     if (openingCustomFlow && sheetType === 'opening-width') return cancelOpeningCustomFlow();
     if (sheetType === 'diagonal') {
       pendingQuote = null;
@@ -4842,50 +4905,191 @@ import { createPdfReader } from './pdf-reader.js';
     ctx.restore();
   }
 
+  function openingSegmentOnWall(opening, wall) {
+    if (!opening || !wall) return null;
+    var centerT = Number.isFinite(opening.position) ? opening.position : 0.5;
+    if (Number.isFinite(opening.offsetCm) && Number.isFinite(opening.widthCm) &&
+        Number.isFinite(wall.lengthCm) && wall.lengthCm > 0) {
+      var centerCm = opening.referenceEnd === 'b'
+        ? wall.lengthCm - opening.offsetCm - opening.widthCm / 2
+        : opening.offsetCm + opening.widthCm / 2;
+      centerT = centerCm / wall.lengthCm;
+    }
+
+    var widthT;
+    if (Number.isFinite(opening.widthCm) && Number.isFinite(wall.lengthCm) && wall.lengthCm > 0) {
+      widthT = opening.widthCm / wall.lengthCm;
+    } else {
+      widthT = opening.type === 'door' ? 0.16 : 0.20;
+    }
+    widthT = Math.max(0.025, Math.min(0.85, widthT));
+
+    var t1 = Math.max(0, Math.min(1, centerT - widthT / 2));
+    var t2 = Math.max(0, Math.min(1, centerT + widthT / 2));
+    if (t2 < t1) { var swap = t1; t1 = t2; t2 = swap; }
+
+    function at(t) {
+      return {
+        x: wall.a.x + (wall.b.x - wall.a.x) * t,
+        y: wall.a.y + (wall.b.y - wall.a.y) * t
+      };
+    }
+
+    return {
+      t1: t1,
+      t2: t2,
+      a: at(t1),
+      b: at(t2),
+      center: at((t1 + t2) / 2)
+    };
+  }
+
   function drawOpening(opening) {
     var wall = walls.find(function (w) { return w.id === opening.wallId; });
     if (!wall) return;
-    var wp = {
-      x: wall.a.x + (wall.b.x - wall.a.x) * opening.position,
-      y: wall.a.y + (wall.b.y - wall.a.y) * opening.position
-    };
-    var openingScreen = worldToScreen(wp);
-    var x = openingScreen.x;
-    var y = openingScreen.y;
-    ctx.save();
-    ctx.fillStyle = opening.type === 'door' ? '#22c55e' : '#06b6d4';
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(x, y, 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = '900 12px system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(opening.type === 'door' ? 'P' : 'F', x, y + 1);
-    ctx.restore();
+    var segment = openingSegmentOnWall(opening, wall);
+    if (!segment) return;
 
-    if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
-      var cornerWorld = opening.referenceEnd === 'b' ? wall.b : wall.a;
-      var corner = worldToScreen(cornerWorld);
-      var sideShort = openingReferenceLabel(opening) === 'SINISTRO' ? 'SX' : 'DX';
-      ctx.save();
-      ctx.fillStyle = '#f59e0b';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 4;
+    var a = worldToScreen(segment.a);
+    var b = worldToScreen(segment.b);
+    var center = worldToScreen(segment.center);
+    var dx = b.x - a.x;
+    var dy = b.y - a.y;
+    var len = Math.max(1, Math.hypot(dx, dy));
+    var ux = dx / len;
+    var uy = dy / len;
+    var nx = -uy;
+    var ny = ux;
+    var active = opening.id === currentOpeningId;
+
+    ctx.save();
+
+    // Vera apertura: cancella il tratto di muro tra i due stipiti.
+    ctx.strokeStyle = '#f8fafc';
+    ctx.lineWidth = active ? 14 : 12;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(a.x - ux * 2, a.y - uy * 2);
+    ctx.lineTo(b.x + ux * 2, b.y + uy * 2);
+    ctx.stroke();
+
+    // Stipiti / bordi apertura.
+    ctx.strokeStyle = active ? '#2563eb' : '#0f172a';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(a.x + nx * 5, a.y + ny * 5);
+    ctx.lineTo(a.x - nx * 5, a.y - ny * 5);
+    ctx.moveTo(b.x + nx * 5, b.y + ny * 5);
+    ctx.lineTo(b.x - nx * 5, b.y - ny * 5);
+    ctx.stroke();
+
+    if (opening.type === 'door') {
+      // Simbolo architettonico porta: anta aperta + arco di rotazione.
+      var hingeAtA = opening.hingeEnd
+        ? opening.hingeEnd === 'a'
+        : opening.referenceEnd !== 'b';
+      var hinge = hingeAtA ? a : b;
+      var closedTip = hingeAtA ? b : a;
+      var leafDx = closedTip.x - hinge.x;
+      var leafDy = closedTip.y - hinge.y;
+      var radius = Math.max(10, Math.hypot(leafDx, leafDy));
+      var side = opening.swingSide === -1 ? -1 : 1;
+      var openTip = {
+        x: hinge.x + (-leafDy / radius) * radius * side,
+        y: hinge.y + (leafDx / radius) * radius * side
+      };
+
+      ctx.strokeStyle = active ? '#2563eb' : '#334155';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(corner.x, corner.y, 15, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(hinge.x, hinge.y);
+      ctx.lineTo(openTip.x, openTip.y);
       ctx.stroke();
-      ctx.fillStyle = '#0f172a';
-      ctx.font = '1000 10px system-ui';
+
+      var startAngle = Math.atan2(closedTip.y - hinge.y, closedTip.x - hinge.x);
+      var endAngle = Math.atan2(openTip.y - hinge.y, openTip.x - hinge.x);
+      ctx.strokeStyle = active ? '#60a5fa' : '#94a3b8';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(hinge.x, hinge.y, radius, startAngle, endAngle, side < 0);
+      ctx.stroke();
+    } else {
+      // Finestra in pianta: due linee sottili parallele dentro il vano.
+      ctx.strokeStyle = active ? '#2563eb' : '#0891b2';
+      ctx.lineWidth = 2;
+      [-2.8, 2.8].forEach(function (off) {
+        ctx.beginPath();
+        ctx.moveTo(a.x + nx * off, a.y + ny * off);
+        ctx.lineTo(b.x + nx * off, b.y + ny * off);
+        ctx.stroke();
+      });
+    }
+
+    // Etichetta larghezza discreta, come quota di progetto.
+    if (Number.isFinite(opening.widthCm)) {
+      var label = openingCmText(opening.widthCm) + ' cm';
+      ctx.font = '800 10px system-ui';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(sideShort, corner.x, corner.y + 1);
-      ctx.restore();
+      var tx = center.x + nx * 15;
+      var ty = center.y + ny * 15;
+      var tw = ctx.measureText(label).width + 10;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1;
+      roundRect(tx - tw / 2, ty - 9, tw, 18, 7);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#334155';
+      ctx.fillText(label, tx, ty + .5);
     }
+
+    // Durante il posizionamento mostra davvero la quota dall'angolo al bordo.
+    if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
+      var cornerWorld = opening.referenceEnd === 'b' ? wall.b : wall.a;
+      var edgeWorld = opening.referenceEnd === 'b' ? segment.b : segment.a;
+      var corner = worldToScreen(cornerWorld);
+      var edge = worldToScreen(edgeWorld);
+      var qdx = edge.x - corner.x;
+      var qdy = edge.y - corner.y;
+      var qlen = Math.max(1, Math.hypot(qdx, qdy));
+      var qnx = -qdy / qlen;
+      var qny = qdx / qlen;
+      var off = 22;
+      var c1 = { x: corner.x + qnx * off, y: corner.y + qny * off };
+      var c2 = { x: edge.x + qnx * off, y: edge.y + qny * off };
+      ctx.strokeStyle = '#f59e0b';
+      ctx.fillStyle = '#f59e0b';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(c1.x, c1.y);
+      ctx.lineTo(c2.x, c2.y);
+      ctx.stroke();
+      [c1, c2].forEach(function (p) {
+        ctx.beginPath();
+        ctx.moveTo(p.x - qnx * 5, p.y - qny * 5);
+        ctx.lineTo(p.x + qnx * 5, p.y + qny * 5);
+        ctx.stroke();
+      });
+      var qlabel = Number.isFinite(opening.offsetCm)
+        ? openingCmText(opening.offsetCm) + ' cm'
+        : 'distanza';
+      ctx.font = '900 10px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      var qmx = (c1.x + c2.x) / 2 + qnx * 10;
+      var qmy = (c1.y + c2.y) / 2 + qny * 10;
+      var qw = ctx.measureText(qlabel).width + 10;
+      ctx.fillStyle = '#fffbeb';
+      ctx.strokeStyle = '#f59e0b';
+      roundRect(qmx - qw / 2, qmy - 9, qw, 18, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#92400e';
+      ctx.fillText(qlabel, qmx, qmy + .5);
+    }
+
+    ctx.restore();
   }
 
   function noteAnchor(note) {
