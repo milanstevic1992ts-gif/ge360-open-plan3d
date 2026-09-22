@@ -46,6 +46,7 @@
       </div>
       <div id="selectionBar" class="selection-bar hidden">
         <div class="selection-info"><b id="selectionLabel">ELEMENTO SELEZIONATO</b><small>Trascina con un dito per spostare</small></div>
+        <button id="editSelectedBtn" class="selection-edit" aria-label="Modifica elemento selezionato">MODIFICA</button>
         <button id="workSelectedBtn" class="selection-work" aria-label="Aggiungi lavorazioni all'elemento selezionato">LAVORI</button>
         <button id="deleteSelectedBtn" class="selection-delete" aria-label="Elimina elemento selezionato">🗑 ELIMINA</button>
         <button id="closeSelectionBtn" class="selection-close" aria-label="Deseleziona">✕</button>
@@ -465,10 +466,10 @@
         <button id="closeCalcBtn" class="round-btn light" aria-label="Chiudi">✕</button>
       </div>
       <p class="calc-help">Lo schizzo è solo una traccia: il server ricostruisce la pianta dalle misure, calcola i muri non misurati quando è possibile e restituisce i m² di ogni stanza.</p>
-      <div class="calc-grid">
+      <div class="calc-grid single">
         <label>Altezza pareti<div class="rect-room-input"><input id="calcHeightInput" inputmode="decimal" value="2,70"><span>m</span></div></label>
-        <label>Spessore muri<div class="rect-room-input"><input id="calcThicknessInput" inputmode="decimal" value="12"><span>cm</span></div></label>
       </div>
+      <p class="calc-rule-note">Lo spessore non viene richiesto nel rilievo base. Verrà chiesto solo quando una lavorazione lo rende necessario, ad esempio nuovo muro o demolizione.</p>
       <label class="room-custom-label">Come hai misurato
         <select id="calcReferenceSelect" class="calc-select">
           <option value="interior">Ogni stanza a filo interno</option>
