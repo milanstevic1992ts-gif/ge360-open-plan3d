@@ -38,7 +38,7 @@
     <main id="stageWrap">
       <canvas id="stage"></canvas>
       <div id="emptyHint" class="empty-hint"><div class="finger">☝️</div><div class="hint-title">Disegna come su un foglio</div><div class="hint-text">Trascina il dito per un muro o fai più lati di seguito.<br><b>Quando lasci il dito ti chiedo subito la misura.</b></div></div>
-      <div id="statusPill" class="status-pill hidden"></div>
+      <button id="statusPill" class="status-pill hidden" type="button" aria-label="Apri controllo geometrico"></button>
       <div id="constructionLegend" class="construction-legend hidden">
         <span data-construction-state="demolish"><i class="demo"></i>DEMOLIRE</span>
         <span data-construction-state="new"><i class="new"></i>NUOVO</span>
@@ -145,6 +145,21 @@
       <button id="cornerToggleBtn" class="corner-toggle hidden">↔ CAMBIA ANGOLO</button>
       <button id="deleteOpeningBtn" class="delete-opening hidden">🗑 ELIMINA APERTURA</button>
       <div class="sheet-actions"><button id="laterBtn" class="secondary">DOPO</button><button id="confirmBtn" class="primary">CONFERMA ✓</button></div>
+    </section>
+  </div>
+
+  <div id="geometryCheckBackdrop" class="modal-backdrop hidden">
+    <section class="geometry-check-card">
+      <div class="settings-head">
+        <div><div class="eyebrow dark">CONTROLLO GEOMETRICO</div><h2>Verifica pianta</h2><p id="geometryCheckMeta"></p></div>
+        <button id="closeGeometryCheckBtn" class="round-btn light" aria-label="Chiudi">✕</button>
+      </div>
+      <div id="geometryCheckSummary" class="geometry-check-summary"></div>
+      <div id="geometryCheckList" class="geometry-check-list"></div>
+      <div class="geometry-check-footer">
+        <button id="resetGeometryIgnoredBtn" type="button" class="secondary">RIPRISTINA IGNORATI</button>
+        <button id="geometryOpenSolverBtn" type="button" class="primary">SISTEMA PIANTA</button>
+      </div>
     </section>
   </div>
 
