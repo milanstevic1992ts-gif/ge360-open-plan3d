@@ -159,6 +159,13 @@
 .opening-preset-grid button.active{border-color:#2563eb;background:#eff6ff;color:#1d4ed8;box-shadow:0 0 0 2px rgba(37,99,235,.10)}
 .opening-preset-grid button.last-used::after{content:"ULTIMA";position:absolute;top:-6px;right:5px;border-radius:999px;background:#0f172a;color:#fff;padding:3px 5px;font-size:7px;letter-spacing:.04em}
 .opening-preset-meta{margin:10px 0 0;padding:9px 11px;border-radius:12px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:800;line-height:1.4}
+.door-swing-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+.door-swing-controls button{min-height:62px;border:1px solid #dbe3ef;border-radius:14px;background:#f8fafc;color:#334155;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:6px;font-weight:1000}
+.door-swing-controls button b{font-size:17px;line-height:1}
+.door-swing-controls button span{font-size:8px;letter-spacing:.035em}
+.door-swing-controls button small{font-size:8px;color:#64748b;font-weight:1000}
+.door-swing-controls button.invert{background:#eef2ff;border-color:#c7d2fe;color:#4338ca}
+.door-swing-controls button:disabled{opacity:.45}
 .opening-advanced{margin-top:10px;border:1px solid #e2e8f0;border-radius:15px;overflow:hidden}
 .opening-advanced summary{cursor:pointer;list-style:none;padding:13px 12px;color:#334155;font-size:10px;font-weight:1000;background:#f8fafc}
 .opening-advanced summary::-webkit-details-marker{display:none}
