@@ -83,6 +83,17 @@ export function buildPlanPayload(plan, extra = {}) {
       out.sliding = out.doorKind === 'sliding';
       out.leaves = out.doorKind === 'double' || out.doorKind === 'armored-double' ? 2 : 1;
       out.category = out.armored ? 'armored' : 'interior';
+      if (out.sliding) {
+        out.slideTo = out.slideTo === 'a' ? 'a' : 'b';
+        delete out.hingeEnd;
+        delete out.swingDirection;
+        delete out.swingSide;
+      } else {
+        out.hingeEnd = out.hingeEnd === 'b' ? 'b' : 'a';
+        out.swingDirection = out.swingDirection === 'outward' ? 'outward' : 'inward';
+        out.swingSide = Number(out.swingSide) === -1 ? -1 : 1;
+        delete out.slideTo;
+      }
     }
     return out;
   });
@@ -126,7 +137,7 @@ export function buildPlanPayload(plan, extra = {}) {
 export function payloadFingerprint(payload) {
   const core = JSON.stringify({
     walls: (payload.walls || []).map(w => [w.id, w.a, w.b, w.lengthCm, w.thicknessMm]),
-    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.category, o.leaves, o.sliding, o.armored, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
+    openings: (payload.openings || []).map(o => [o.id, o.wallId, o.type, o.doorKind, o.category, o.leaves, o.sliding, o.armored, o.hingeEnd, o.swingDirection, o.swingSide, o.slideTo, o.widthCm, o.offsetCm, o.referenceEnd, o.heightCm, o.sillHeightCm, o.position]),
     rooms: (payload.rooms || []).map(r => [r.id, r.name, r.type, r.wallIds, r.heightCm, r.tilingHeightCm]),
     diagonals: payload.diagonals,
     h: payload.wallHeightM,
