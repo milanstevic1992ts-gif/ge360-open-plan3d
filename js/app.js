@@ -692,6 +692,19 @@ import { createPdfReader } from './pdf-reader.js';
   }
 
   function selectableEntityAt(p) {
+    // Aperture prima dei muri: altrimenti una porta coincide geometricamente col muro
+    // e sarebbe quasi impossibile selezionarla in modalità modifica.
+    var openingHit = nearestOpening(p);
+    if (openingHit && openingHit.distance <= 34 / viewZoom) {
+      var op = openingHit.opening;
+      return {
+        type: 'opening',
+        id: op.id,
+        wallId: op.wallId,
+        name: op.type === 'door' ? 'Porta' : 'Finestra'
+      };
+    }
+
     var wallHit = nearestWall(p);
     if (wallHit && wallHit.distance <= 28 / viewZoom) {
       return { type: 'wall', id: wallHit.wall.id, wallIds: [wallHit.wall.id], name: 'Muro' };
@@ -716,13 +729,30 @@ import { createPdfReader } from './pdf-reader.js';
       bar.classList.add('hidden');
       return;
     }
+
+    $('workSelectedBtn').classList.toggle('hidden', selectedEntity.type === 'opening');
+
     if (selectedEntity.type === 'wall') {
       var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
       var measure = wall && Number.isFinite(wall.lengthCm) ? ' · ' + metersText(wall.lengthCm) + ' m' : '';
       $('selectionLabel').textContent = 'MURO' + measure;
+      $('selectionHint').textContent = 'Trascina con un dito per spostare il muro';
+    } else if (selectedEntity.type === 'opening') {
+      var opening = openings.find(function (o) { return o.id === selectedEntity.id; });
+      if (!opening) {
+        clearSelection(false);
+        return;
+      }
+      var label;
+      if (opening.type === 'door') label = doorKindSpec(opening.doorKind || 'internal').label;
+      else label = windowKindSpec(opening.windowKind || 'single', settings).label;
+      $('selectionLabel').textContent = String(label).toUpperCase() +
+        (Number.isFinite(opening.widthCm) ? ' · ' + openingCmText(opening.widthCm) + ' cm' : '');
+      $('selectionHint').textContent = 'Trascina lungo il muro · MODIFICA per misure e tipo';
     } else {
       var room = selectedEntity.id ? rooms.find(function (r) { return r.id === selectedEntity.id; }) : null;
       $('selectionLabel').textContent = 'STANZA · ' + String(room ? room.name : (selectedEntity.name || 'Ambiente')).toUpperCase();
+      $('selectionHint').textContent = 'Trascina con un dito per spostare la stanza';
     }
     bar.classList.remove('hidden');
   }
@@ -800,6 +830,55 @@ import { createPdfReader } from './pdf-reader.js';
     surfaceCache = null;
   }
 
+  function openingOverlapAtPosition(opening, position) {
+    var wall = openingWall(opening);
+    if (!wall || !Number.isFinite(wall.lengthCm) || wall.lengthCm <= 0 ||
+        !Number.isFinite(opening.widthCm)) return false;
+    var center = position * wall.lengthCm;
+    var start = center - opening.widthCm / 2;
+    var end = center + opening.widthCm / 2;
+    return openings.some(function (other) {
+      if (!other || other.id === opening.id || other.wallId !== opening.wallId ||
+          !Number.isFinite(other.widthCm)) return false;
+      var otherCenter = Number(other.position);
+      if (!Number.isFinite(otherCenter)) {
+        var point = openingWorldPoint(other, wall);
+        if (!point) return false;
+        otherCenter = dist(wall.a, point) / Math.max(1e-6, dist(wall.a, wall.b));
+      }
+      var oc = otherCenter * wall.lengthCm;
+      var os = oc - other.widthCm / 2;
+      var oe = oc + other.widthCm / 2;
+      return start < oe - 0.5 && end > os + 0.5;
+    });
+  }
+
+  function moveOpeningAlongWall(opening, p) {
+    var wall = openingWall(opening);
+    if (!opening || !wall) return false;
+    var hit = distToSegment(p, wall.a, wall.b);
+    var t = hit.t;
+
+    if (Number.isFinite(wall.lengthCm) && wall.lengthCm > 0 && Number.isFinite(opening.widthCm)) {
+      var halfT = Math.min(.49, opening.widthCm / wall.lengthCm / 2);
+      t = Math.max(halfT, Math.min(1 - halfT, t));
+      if (openingOverlapAtPosition(opening, t)) return false;
+      var centerCm = t * wall.lengthCm;
+      opening.offsetCm = opening.referenceEnd === 'b'
+        ? Math.round((wall.lengthCm - centerCm - opening.widthCm / 2) * 10) / 10
+        : Math.round((centerCm - opening.widthCm / 2) * 10) / 10;
+      opening.offsetCm = Math.max(0, opening.offsetCm);
+    } else {
+      t = Math.max(.02, Math.min(.98, t));
+      opening.offsetCm = null;
+    }
+
+    opening.position = t;
+    if (opening.type === 'door') syncDoorMotion(opening);
+    surfaceCache = null;
+    return true;
+  }
+
   function updateSelectionDrag(p, pointerId) {
     if (!selectionDrag || selectionDrag.pointerId !== pointerId) return false;
     var threshold = 4 / viewZoom;
@@ -809,6 +888,21 @@ import { createPdfReader } from './pdf-reader.js';
       pushHistorySnapshot(selectionDrag.beforeSnapshot);
       selectionDrag.checkpointed = true;
     }
+
+    if (selectedEntity && selectedEntity.type === 'opening') {
+      var opening = openings.find(function (o) { return o.id === selectedEntity.id; });
+      if (!opening) return true;
+      var movedOpening = moveOpeningAlongWall(opening, p);
+      if (movedOpening) {
+        selectionDrag.moved = true;
+        selectionDrag.last = { x: p.x, y: p.y };
+      } else {
+        selectionDrag.blocked = true;
+      }
+      render();
+      return true;
+    }
+
     selectionDrag.moved = true;
     var from = selectionDrag.last;
     translateWallSet(selectionDrag.wallIds, p.x - from.x, p.y - from.y);
@@ -829,7 +923,7 @@ import { createPdfReader } from './pdf-reader.js';
       updateSelectionBar();
       render();
       vibrate(16);
-      toast('Elemento spostato ✓');
+      toast(selectedEntity && selectedEntity.type === 'opening' ? 'Apertura spostata sul muro ✓' : 'Elemento spostato ✓');
     }
     return true;
   }
@@ -848,6 +942,25 @@ import { createPdfReader } from './pdf-reader.js';
   function deleteSelectedEntity() {
     if (!selectedEntity) return;
     var entity = clone(selectedEntity);
+
+    if (entity.type === 'opening') {
+      var selectedOpening = openings.find(function (o) { return o.id === entity.id; });
+      if (!selectedOpening) return clearSelection(false);
+      var openingLabel = selectedOpening.type === 'door' ? 'porta' : 'finestra';
+      if (!confirm('Eliminare questa ' + openingLabel + '?')) return;
+      checkpoint();
+      openings = openings.filter(function (o) { return o.id !== entity.id; });
+      notes = notes.filter(function (n) { return !(n.targetType === 'opening' && n.targetId === entity.id); });
+      selectedEntity = null;
+      selectionDrag = null;
+      surfaceCache = null;
+      persistActive();
+      updateUI();
+      render();
+      vibrate(20);
+      toast(openingLabel === 'porta' ? 'Porta eliminata' : 'Finestra eliminata');
+      return;
+    }
     var isRoom = entity.type === 'room';
     var question = isRoom
       ? 'Eliminare questa stanza? I muri esclusivi della stanza verranno eliminati.'
@@ -966,6 +1079,13 @@ import { createPdfReader } from './pdf-reader.js';
       var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
       if (!wall) return toast('Muro non trovato');
       editWallMeasurement(wall);
+      return;
+    }
+
+    if (selectedEntity.type === 'opening') {
+      var selectedOpening = openings.find(function (o) { return o.id === selectedEntity.id; });
+      if (!selectedOpening) return toast('Apertura non trovata');
+      editOpening(selectedOpening);
       return;
     }
 
@@ -5332,7 +5452,8 @@ import { createPdfReader } from './pdf-reader.js';
     var uy = dy / len;
     var nx = -uy;
     var ny = ux;
-    var active = opening.id === currentOpeningId;
+    var active = opening.id === currentOpeningId ||
+      (mode === 'select' && selectedEntity && selectedEntity.type === 'opening' && selectedEntity.id === opening.id);
 
     ctx.save();
 
