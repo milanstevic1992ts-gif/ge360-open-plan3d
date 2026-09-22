@@ -1618,6 +1618,7 @@ import { createPdfReader } from './pdf-reader.js';
       return toast('Questo tipo di porta non entra nel muro');
     }
     Object.assign(opening, fit.opening);
+    syncDoorMotion(opening);
     renderOpeningQuick();
     render();
     vibrate(12);
@@ -1650,7 +1651,13 @@ import { createPdfReader } from './pdf-reader.js';
     $('openingAdvancedSillRow').classList.toggle('hidden', isDoor);
     $('deleteOpeningQuickBtn').classList.toggle('hidden', openingQuickIsNew);
 
-    if (isDoor) renderDoorPresetButtons(opening);
+    if (isDoor) {
+      syncDoorMotion(opening);
+      renderDoorPresetButtons(opening);
+      renderDoorMotionControls(opening);
+    } else {
+      $('doorSwingControls').classList.add('hidden');
+    }
 
     var single = openingPresetSpec('window', 'single', settings);
     var double = openingPresetSpec('window', 'double', settings);
@@ -5090,6 +5097,153 @@ import { createPdfReader } from './pdf-reader.js';
     };
   }
 
+  function wallEndForVisualSide(wall, side) {
+    if (!wall) return side === 'right' ? 'b' : 'a';
+    var a = worldToScreen(wall.a);
+    var b = worldToScreen(wall.b);
+    if (Math.abs(a.x - b.x) < 1) {
+      var topEnd = a.y <= b.y ? 'a' : 'b';
+      return side === 'right' ? (topEnd === 'a' ? 'b' : 'a') : topEnd;
+    }
+    var leftEnd = a.x <= b.x ? 'a' : 'b';
+    return side === 'right' ? (leftEnd === 'a' ? 'b' : 'a') : leftEnd;
+  }
+
+  function doorHingeLabel(opening) {
+    var wall = openingWall(opening);
+    if (!wall) return opening && opening.hingeEnd === 'b' ? 'DESTRA' : 'SINISTRA';
+    return opening.hingeEnd === wallEndForVisualSide(wall, 'right') ? 'DESTRA' : 'SINISTRA';
+  }
+
+  function roomSideForWall(wall) {
+    if (!wall) return null;
+    var face = buildFaces(walls).find(function (candidate) {
+      return candidate && Array.isArray(candidate.wallIds) && candidate.wallIds.indexOf(wall.id) !== -1;
+    });
+    if (!face || !face.centroid) return null;
+    var dx = wall.b.x - wall.a.x;
+    var dy = wall.b.y - wall.a.y;
+    var px = face.centroid.x - wall.a.x;
+    var py = face.centroid.y - wall.a.y;
+    var cross = dx * py - dy * px;
+    if (Math.abs(cross) < 1e-6) return null;
+    return cross > 0 ? 1 : -1;
+  }
+
+  function syncDoorMotion(opening) {
+    if (!opening || opening.type !== 'door') return opening;
+    var wall = openingWall(opening);
+    var kind = normalizeDoorKind(opening.doorKind || 'internal');
+    var meta = doorKindSpec(kind);
+    opening.doorKind = kind;
+
+    if (meta.sliding) {
+      if (opening.slideTo !== 'a' && opening.slideTo !== 'b') {
+        opening.slideTo = wall ? wallEndForVisualSide(wall, 'right') : 'b';
+      }
+      opening.swingDirection = null;
+      opening.swingSide = null;
+      opening.hingeEnd = null;
+      return opening;
+    }
+
+    if (opening.hingeEnd !== 'a' && opening.hingeEnd !== 'b') {
+      opening.hingeEnd = wall ? wallEndForVisualSide(wall, 'left') : 'a';
+    }
+    if (opening.swingDirection !== 'outward') opening.swingDirection = 'inward';
+
+    var inside = roomSideForWall(wall);
+    if (inside == null) {
+      if (opening.swingSide !== -1 && opening.swingSide !== 1) opening.swingSide = 1;
+    } else {
+      opening.swingSide = opening.swingDirection === 'outward' ? -inside : inside;
+    }
+    return opening;
+  }
+
+  function renderDoorMotionControls(opening) {
+    var wrap = $('doorSwingControls');
+    if (!wrap) return;
+    var isDoor = opening && opening.type === 'door';
+    wrap.classList.toggle('hidden', !isDoor);
+    if (!isDoor) return;
+
+    syncDoorMotion(opening);
+    var meta = doorKindSpec(opening.doorKind);
+
+    if (meta.sliding) {
+      $('doorHingeBtn').disabled = false;
+      $('doorHingeBtn').querySelector('span').textContent = 'SCORRIMENTO';
+      $('doorHingeValue').textContent = opening.slideTo === wallEndForVisualSide(openingWall(opening), 'right') ? 'DESTRA' : 'SINISTRA';
+      $('doorSwingBtn').disabled = true;
+      $('doorSwingBtn').querySelector('span').textContent = 'APERTURA';
+      $('doorSwingValue').textContent = 'SCORREVOLE';
+      $('doorInvertBtn').querySelector('small').textContent = 'scorrimento';
+      return;
+    }
+
+    $('doorHingeBtn').querySelector('span').textContent = meta.leaves === 2 ? 'CERNIERE' : 'CERNIERA';
+    $('doorHingeValue').textContent = meta.leaves === 2 ? 'DUE LATI' : doorHingeLabel(opening);
+    $('doorHingeBtn').disabled = meta.leaves === 2;
+    $('doorSwingBtn').disabled = false;
+    $('doorSwingBtn').querySelector('span').textContent = 'APERTURA';
+    $('doorSwingValue').textContent = opening.swingDirection === 'outward' ? 'ESTERNA' : 'INTERNA';
+    $('doorInvertBtn').querySelector('small').textContent = 'porta';
+  }
+
+  function toggleDoorHinge() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening || opening.type !== 'door') return;
+    var meta = doorKindSpec(opening.doorKind);
+    var wall = openingWall(opening);
+
+    checkpoint();
+    if (meta.sliding) {
+      opening.slideTo = opening.slideTo === 'a' ? 'b' : 'a';
+    } else if (meta.leaves === 1) {
+      opening.hingeEnd = opening.hingeEnd === 'a' ? 'b' : 'a';
+    }
+    syncDoorMotion(opening);
+    persistActive();
+    renderOpeningQuick();
+    render();
+    vibrate(12);
+  }
+
+  function toggleDoorSwing() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening || opening.type !== 'door') return;
+    var meta = doorKindSpec(opening.doorKind);
+    if (meta.sliding) return;
+
+    checkpoint();
+    opening.swingDirection = opening.swingDirection === 'outward' ? 'inward' : 'outward';
+    syncDoorMotion(opening);
+    persistActive();
+    renderOpeningQuick();
+    render();
+    vibrate(12);
+  }
+
+  function invertDoorMotion() {
+    var opening = openings.find(function (o) { return o.id === currentOpeningId; });
+    if (!opening || opening.type !== 'door') return;
+    var meta = doorKindSpec(opening.doorKind);
+
+    checkpoint();
+    if (meta.sliding) {
+      opening.slideTo = opening.slideTo === 'a' ? 'b' : 'a';
+    } else {
+      if (meta.leaves === 1) opening.hingeEnd = opening.hingeEnd === 'a' ? 'b' : 'a';
+      opening.swingDirection = opening.swingDirection === 'outward' ? 'inward' : 'outward';
+    }
+    syncDoorMotion(opening);
+    persistActive();
+    renderOpeningQuick();
+    render();
+    vibrate(16);
+  }
+
   function drawOpening(opening) {
     var wall = walls.find(function (w) { return w.id === opening.wallId; });
     if (!wall) return;
@@ -5130,35 +5284,106 @@ import { createPdfReader } from './pdf-reader.js';
     ctx.stroke();
 
     if (opening.type === 'door') {
-      // Simbolo architettonico porta: anta aperta + arco di rotazione.
-      var hingeAtA = opening.hingeEnd
-        ? opening.hingeEnd === 'a'
-        : opening.referenceEnd !== 'b';
-      var hinge = hingeAtA ? a : b;
-      var closedTip = hingeAtA ? b : a;
-      var leafDx = closedTip.x - hinge.x;
-      var leafDy = closedTip.y - hinge.y;
-      var radius = Math.max(10, Math.hypot(leafDx, leafDy));
-      var side = opening.swingSide === -1 ? -1 : 1;
-      var openTip = {
-        x: hinge.x + (-leafDy / radius) * radius * side,
-        y: hinge.y + (leafDx / radius) * radius * side
-      };
+      syncDoorMotion(opening);
+      var doorMeta = doorKindSpec(opening.doorKind);
+      var doorStroke = opening.armored ? 3.3 : 2;
 
-      ctx.strokeStyle = active ? '#2563eb' : '#334155';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(hinge.x, hinge.y);
-      ctx.lineTo(openTip.x, openTip.y);
-      ctx.stroke();
+      if (doorMeta.sliding) {
+        // Porta scorrevole: pannello parallelo al muro + freccia del verso.
+        var slideSign = opening.slideTo === 'a' ? -1 : 1;
+        var panelOffset = 8;
+        ctx.strokeStyle = active ? '#2563eb' : '#334155';
+        ctx.lineWidth = doorStroke;
+        ctx.beginPath();
+        ctx.moveTo(a.x + nx * panelOffset, a.y + ny * panelOffset);
+        ctx.lineTo(b.x + nx * panelOffset, b.y + ny * panelOffset);
+        ctx.stroke();
 
-      var startAngle = Math.atan2(closedTip.y - hinge.y, closedTip.x - hinge.x);
-      var endAngle = Math.atan2(openTip.y - hinge.y, openTip.x - hinge.x);
-      ctx.strokeStyle = active ? '#60a5fa' : '#94a3b8';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(hinge.x, hinge.y, radius, startAngle, endAngle, side < 0);
-      ctx.stroke();
+        var arrowBase = slideSign < 0 ? b : a;
+        var arrowTip = slideSign < 0 ? a : b;
+        var ax = arrowTip.x - arrowBase.x;
+        var ay = arrowTip.y - arrowBase.y;
+        var al = Math.max(1, Math.hypot(ax, ay));
+        var auX = ax / al, auY = ay / al;
+        var tipX = center.x + auX * Math.min(18, len * .25);
+        var tipY = center.y + auY * Math.min(18, len * .25);
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(center.x - auX * 12, center.y - auY * 12);
+        ctx.lineTo(tipX, tipY);
+        ctx.lineTo(tipX - auX * 6 + auY * 4, tipY - auY * 6 - auX * 4);
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - auX * 6 - auY * 4, tipY - auY * 6 + auX * 4);
+        ctx.stroke();
+      } else if (doorMeta.leaves === 2) {
+        // Doppia anta: due cerniere ai lati e apertura verso lo stesso ambiente.
+        var half = len / 2;
+        var side2 = opening.swingSide === -1 ? -1 : 1;
+        var mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        [
+          { hinge: a, closed: mid, sign: 1 },
+          { hinge: b, closed: mid, sign: -1 }
+        ].forEach(function (leaf) {
+          var ldx = leaf.closed.x - leaf.hinge.x;
+          var ldy = leaf.closed.y - leaf.hinge.y;
+          var lr = Math.max(8, Math.hypot(ldx, ldy));
+          var openTip = {
+            x: leaf.hinge.x + (-ldy / lr) * lr * side2,
+            y: leaf.hinge.y + (ldx / lr) * lr * side2
+          };
+          ctx.strokeStyle = active ? '#2563eb' : '#334155';
+          ctx.lineWidth = doorStroke;
+          ctx.beginPath();
+          ctx.moveTo(leaf.hinge.x, leaf.hinge.y);
+          ctx.lineTo(openTip.x, openTip.y);
+          ctx.stroke();
+
+          ctx.strokeStyle = active ? '#60a5fa' : '#94a3b8';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          var sa2 = Math.atan2(leaf.closed.y - leaf.hinge.y, leaf.closed.x - leaf.hinge.x);
+          var ea2 = Math.atan2(openTip.y - leaf.hinge.y, openTip.x - leaf.hinge.x);
+          ctx.arc(leaf.hinge.x, leaf.hinge.y, Math.min(lr, half), sa2, ea2, side2 < 0);
+          ctx.stroke();
+        });
+      } else {
+        // Porta singola: anta + arco di rotazione.
+        var hingeAtA = opening.hingeEnd === 'a';
+        var hinge = hingeAtA ? a : b;
+        var closedTip = hingeAtA ? b : a;
+        var leafDx = closedTip.x - hinge.x;
+        var leafDy = closedTip.y - hinge.y;
+        var radius = Math.max(10, Math.hypot(leafDx, leafDy));
+        var side = opening.swingSide === -1 ? -1 : 1;
+        var openTip = {
+          x: hinge.x + (-leafDy / radius) * radius * side,
+          y: hinge.y + (leafDx / radius) * radius * side
+        };
+
+        ctx.strokeStyle = active ? '#2563eb' : '#334155';
+        ctx.lineWidth = doorStroke;
+        ctx.beginPath();
+        ctx.moveTo(hinge.x, hinge.y);
+        ctx.lineTo(openTip.x, openTip.y);
+        ctx.stroke();
+
+        var startAngle = Math.atan2(closedTip.y - hinge.y, closedTip.x - hinge.x);
+        var endAngle = Math.atan2(openTip.y - hinge.y, openTip.x - hinge.x);
+        ctx.strokeStyle = active ? '#60a5fa' : '#94a3b8';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(hinge.x, hinge.y, radius, startAngle, endAngle, side < 0);
+        ctx.stroke();
+      }
+
+      if (opening.armored) {
+        // Piccolo marcatore B = blindata, senza appesantire la pianta.
+        ctx.fillStyle = active ? '#2563eb' : '#9a3412';
+        ctx.font = '1000 9px system-ui';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('B', center.x - nx * 11, center.y - ny * 11);
+      }
     } else {
       // Finestra in pianta: due linee sottili parallele dentro il vano.
       ctx.strokeStyle = active ? '#2563eb' : '#0891b2';
@@ -5171,24 +5396,6 @@ import { createPdfReader } from './pdf-reader.js';
       });
     }
 
-    // Etichetta larghezza discreta, come quota di progetto.
-    if (Number.isFinite(opening.widthCm)) {
-      var label = openingCmText(opening.widthCm) + ' cm';
-      ctx.font = '800 10px system-ui';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      var tx = center.x + nx * 15;
-      var ty = center.y + ny * 15;
-      var tw = ctx.measureText(label).width + 10;
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 1;
-      roundRect(tx - tw / 2, ty - 9, tw, 18, 7);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#334155';
-      ctx.fillText(label, tx, ty + .5);
-    }
 
     // Durante il posizionamento mostra davvero la quota dall'angolo al bordo.
     if (sheetType === 'opening-offset' && opening.id === currentOpeningId) {
@@ -5671,6 +5878,9 @@ import { createPdfReader } from './pdf-reader.js';
       applyOpeningPreset(presetButton.dataset.openingPreset);
     }
   });
+  $('doorHingeBtn').addEventListener('click', toggleDoorHinge);
+  $('doorSwingBtn').addEventListener('click', toggleDoorSwing);
+  $('doorInvertBtn').addEventListener('click', invertDoorMotion);
   $('openingReferenceBtn').addEventListener('click', toggleOpeningAdvancedReference);
   $('saveOpeningAdvancedBtn').addEventListener('click', saveOpeningAdvanced);
   $('deleteOpeningQuickBtn').addEventListener('click', deleteCurrentOpening);
