@@ -64,6 +64,7 @@ import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines }
   var pendingRoomFace = null;
   var pendingRoomId = null;
   var selectedRoomName = '';
+  var roomCardRoomId = null;
   var surfaceCache = null;
   var presentationModel = null;
   var notes = [];
@@ -1218,6 +1219,155 @@ import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines }
     vibrate(14);
   }
 
+  function openRoomDataEditor(face, existing) {
+    if (!face) return toast('Non riesco a riconoscere questa stanza');
+    pendingRoomFace = face;
+    pendingRoomId = existing ? existing.id : null;
+    selectedRoomName = existing ? existing.name : '';
+    $('roomCustomName').value = existing && existing.custom ? existing.name : '';
+    $('roomHeightInput').value = existing && existing.heightCm ? metersText(existing.heightCm) : '';
+    $('roomTilingInput').value = existing && existing.tilingHeightCm ? metersText(existing.tilingHeightCm) : '';
+    document.querySelectorAll('[data-room-name]').forEach(function (b) {
+      b.classList.toggle('selected', !!existing && existing.name === b.dataset.roomName);
+    });
+    $('roomBackdrop').classList.remove('hidden');
+    vibrate(14);
+  }
+
+  function roomOpeningRows(room) {
+    var ids = new Set((room && room.wallIds) || []);
+    return openings.filter(function (opening) { return ids.has(opening.wallId); });
+  }
+
+  function roomRelatedCount(room, rows) {
+    if (!room) return 0;
+    var wallIds = new Set(room.wallIds || []);
+    var openingIds = new Set(roomOpeningRows(room).map(function (o) { return o.id; }));
+    var seen = new Set();
+    (rows || []).forEach(function (row) {
+      if (!row || seen.has(row.id)) return;
+      var related =
+        (row.targetType === 'room' && row.targetId === room.id) ||
+        (row.targetType === 'wall' && wallIds.has(row.targetId)) ||
+        (row.targetType === 'opening' && openingIds.has(row.targetId)) ||
+        (row.roomName && row.roomName === room.name);
+      if (related) seen.add(row.id);
+    });
+    return seen.size;
+  }
+
+  function roomCardMetric(room) {
+    var plan = currentPlan();
+    var authoritative = authoritativeResult(plan);
+    var serverRoom = authoritative && (authoritative.rooms || []).find(function (r) {
+      return r.roomId === room.id;
+    });
+    if (serverRoom) {
+      return {
+        source: 'SERVER',
+        floorM2: serverRoom.floorAreaM2,
+        ceilingM2: serverRoom.ceilingAreaM2,
+        perimeterM: serverRoom.perimeterM,
+        grossWallM2: serverRoom.grossWallAreaM2,
+        netWallM2: serverRoom.netWallAreaM2,
+        heightM: Number.isFinite(serverRoom.heightMm) ? serverRoom.heightMm / 1000 : wallHeightM
+      };
+    }
+
+    var cache = surfaceCache || refreshSurfaceCache();
+    var local = cache && (cache.roomMetrics || []).find(function (m) {
+      return m.room && m.room.id === room.id;
+    });
+    var roomOpenings = roomOpeningRows(room);
+    var openingM2 = roomOpenings.reduce(function (sum, opening) {
+      if (!Number.isFinite(opening.widthCm) || !Number.isFinite(opening.heightCm)) return sum;
+      return sum + opening.widthCm * opening.heightCm / 10000;
+    }, 0);
+    var gross = local && Number.isFinite(local.wallsM2) ? local.wallsM2 : null;
+    return {
+      source: local ? (local.status === 'ok' ? 'LOCALE' : 'STIMA LOCALE') : 'DA VERIFICARE',
+      floorM2: local && local.floorM2,
+      ceilingM2: local && local.ceilingM2,
+      perimeterM: local && local.perimeterM,
+      grossWallM2: gross,
+      netWallM2: Number.isFinite(gross) ? Math.max(0, gross - openingM2) : null,
+      heightM: Number.isFinite(room.heightCm) ? room.heightCm / 100 : wallHeightM
+    };
+  }
+
+  function roomCardMetricCell(label, value, unit) {
+    var cell = document.createElement('div');
+    cell.className = 'room-card-metric';
+    var k = document.createElement('span');
+    k.textContent = label;
+    var v = document.createElement('b');
+    v.textContent = Number.isFinite(Number(value))
+      ? Number(value).toFixed(unit === 'm' ? 2 : 2).replace('.', ',') + ' ' + unit
+      : '—';
+    cell.appendChild(k);
+    cell.appendChild(v);
+    return cell;
+  }
+
+  function roomCardCountCell(label, value) {
+    var cell = document.createElement('div');
+    cell.className = 'room-card-count';
+    var v = document.createElement('b');
+    v.textContent = String(value || 0);
+    var k = document.createElement('span');
+    k.textContent = label;
+    cell.appendChild(v);
+    cell.appendChild(k);
+    return cell;
+  }
+
+  function openRoomCard(room, face) {
+    if (!room) return openRoomDataEditor(face, null);
+    roomCardRoomId = room.id;
+    var metric = roomCardMetric(room);
+    var roomOpenings = roomOpeningRows(room);
+    var doors = roomOpenings.filter(function (o) { return o.type === 'door'; }).length;
+    var windows = roomOpenings.filter(function (o) { return o.type === 'window'; }).length;
+    var plan = currentPlan();
+    var roomWorks = roomRelatedCount(room, works);
+    var roomNotes = roomRelatedCount(room, notes);
+    var roomPhotos = roomRelatedCount(room, plan && plan.photos || []);
+
+    $('roomCardTitle').textContent = room.name || 'Ambiente';
+    $('roomCardMeta').textContent =
+      'h ' + (Number(metric.heightM) || wallHeightM).toFixed(2).replace('.', ',') + ' m · ' + metric.source;
+
+    var metrics = $('roomCardMetrics');
+    metrics.innerHTML = '';
+    metrics.appendChild(roomCardMetricCell('PAVIMENTO', metric.floorM2, 'm²'));
+    metrics.appendChild(roomCardMetricCell('SOFFITTO', metric.ceilingM2, 'm²'));
+    metrics.appendChild(roomCardMetricCell('PERIMETRO', metric.perimeterM, 'm'));
+    metrics.appendChild(roomCardMetricCell('PARETI LORDE', metric.grossWallM2, 'm²'));
+    metrics.appendChild(roomCardMetricCell('PARETI NETTE', metric.netWallM2, 'm²'));
+    metrics.appendChild(roomCardMetricCell('ALTEZZA', metric.heightM, 'm'));
+
+    var counts = $('roomCardCounts');
+    counts.innerHTML = '';
+    counts.appendChild(roomCardCountCell('PORTE', doors));
+    counts.appendChild(roomCardCountCell('FINESTRE', windows));
+    counts.appendChild(roomCardCountCell('LAVORI', roomWorks));
+    counts.appendChild(roomCardCountCell('APPUNTI/FOTO', roomNotes + roomPhotos));
+
+    $('roomCardBackdrop').classList.remove('hidden');
+  }
+
+  function closeRoomCard() {
+    roomCardRoomId = null;
+    $('roomCardBackdrop').classList.add('hidden');
+  }
+
+  function activeRoomCardContext() {
+    var room = rooms.find(function (r) { return r.id === roomCardRoomId; });
+    if (!room) return null;
+    var face = faceForWallIds(room.wallIds || []) || matchRoomFace(room, buildFaces(walls));
+    return { room: room, face: face };
+  }
+
   function editSelectedEntity() {
     if (!selectedEntity) return toast('Seleziona prima un muro o una stanza');
 
@@ -1242,17 +1392,8 @@ import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines }
       ? rooms.find(function (r) { return r.id === selectedEntity.id; })
       : faceRoom(face);
 
-    pendingRoomFace = face;
-    pendingRoomId = existing ? existing.id : null;
-    selectedRoomName = existing ? existing.name : '';
-    $('roomCustomName').value = existing && existing.custom ? existing.name : '';
-    $('roomHeightInput').value = existing && existing.heightCm ? metersText(existing.heightCm) : '';
-    $('roomTilingInput').value = existing && existing.tilingHeightCm ? metersText(existing.tilingHeightCm) : '';
-    document.querySelectorAll('[data-room-name]').forEach(function (b) {
-      b.classList.toggle('selected', !!existing && existing.name === b.dataset.roomName);
-    });
-    $('roomBackdrop').classList.remove('hidden');
-    vibrate(14);
+    if (existing) openRoomCard(existing, face);
+    else openRoomDataEditor(face, null);
   }
 
   function editOpening(opening) {
@@ -6420,6 +6561,34 @@ import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines }
   });
   $('solveBackdrop').addEventListener('click', function (e) { if (e.target === $('solveBackdrop')) closeSolver(); });
   $('closeRoomBtn').addEventListener('click', closeRoomModal);
+  $('closeRoomCardBtn').addEventListener('click', closeRoomCard);
+  $('roomCardBackdrop').addEventListener('click', function (e) {
+    if (e.target === $('roomCardBackdrop')) closeRoomCard();
+  });
+  $('roomCardEditBtn').addEventListener('click', function () {
+    var ctx = activeRoomCardContext();
+    if (!ctx) return closeRoomCard();
+    closeRoomCard();
+    openRoomDataEditor(ctx.face, ctx.room);
+  });
+  $('roomCardWorksBtn').addEventListener('click', function () {
+    var ctx = activeRoomCardContext();
+    if (!ctx) return closeRoomCard();
+    var room = ctx.room;
+    closeRoomCard();
+    openWorks({
+      type:'room',
+      id:room.id,
+      name:room.name || 'Ambiente',
+      roomType:room.type || roomTypeFromName(room.name)
+    });
+  });
+  $('roomCardNotesBtn').addEventListener('click', function () {
+    var ctx = activeRoomCardContext();
+    if (!ctx || !ctx.face) return toast('Stanza non riconosciuta');
+    closeRoomCard();
+    openNoteEditor(buildRoomTarget('room', ctx.face));
+  });
   $('saveRoomBtn').addEventListener('click', saveRoom);
   $('roomBackdrop').addEventListener('click', function (e) { if (e.target === $('roomBackdrop')) closeRoomModal(); });
   document.querySelectorAll('[data-room-name]').forEach(function (b) {
