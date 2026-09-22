@@ -558,5 +558,14 @@
 .wall-state-grid button.active{border-color:#b45309;background:#fffbeb;color:#92400e;box-shadow:0 0 0 2px rgba(180,83,9,.09)}
 .wall-state-grid button[data-wall-state="demolish"].active{background:#fef2f2;border-color:#dc2626;color:#991b1b}
 .wall-state-grid button[data-wall-state="new"].active{background:#f0fdf4;border-color:#16a34a;color:#166534}
+.wall-thickness-panel{margin-top:12px;padding:12px;border-radius:16px;background:#fff7ed;border:1px solid #fed7aa}
+.wall-thickness-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:9px}
+.wall-thickness-head b{font-size:11px;color:#9a3412}
+.wall-thickness-head small{font-size:8px;line-height:1.3;text-align:right;color:#c2410c;font-weight:800}
+.wall-thickness-presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.wall-thickness-presets button{min-height:42px;border:1px solid #fdba74;border-radius:12px;background:#fff;color:#9a3412;font-size:10px;font-weight:1000}
+.wall-thickness-presets button.active{background:#9a3412;border-color:#9a3412;color:#fff}
+.wall-thickness-custom{display:block;margin-top:9px;color:#9a3412;font-size:9px;font-weight:1000}
+.wall-state-card>.primary{margin-top:10px}
 .wall-state-summary{margin-top:10px;padding:10px 12px;border-radius:12px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:900}
 @media(max-width:390px){.wall-state-grid{grid-template-columns:1fr 1fr}.wall-state-grid button{min-height:72px}}
