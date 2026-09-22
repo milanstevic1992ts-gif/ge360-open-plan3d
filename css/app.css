@@ -250,12 +250,13 @@
 .bottom-bar .select-tool.active{background:#4f46e5;color:#fff}
 .bottom-bar .room-tool{background:#ecfdf5;color:#047857}
 .bottom-bar .room-tool:active{background:#d1fae5}
-.selection-bar{position:absolute;z-index:19;left:12px;right:12px;top:68px;min-height:62px;border-radius:17px;background:rgba(15,23,42,.96);color:#fff;box-shadow:0 10px 30px rgba(15,23,42,.24);display:grid;grid-template-columns:minmax(0,1fr) auto auto auto 42px;gap:7px;align-items:center;padding:9px 10px}
+.selection-bar{position:absolute;z-index:19;left:12px;right:12px;top:68px;min-height:62px;border-radius:17px;background:rgba(15,23,42,.96);color:#fff;box-shadow:0 10px 30px rgba(15,23,42,.24);display:grid;grid-template-columns:minmax(0,1fr) auto auto auto auto 42px;gap:7px;align-items:center;padding:9px 10px}
 .selection-info{min-width:0}
 .selection-info b{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .selection-info small{display:block;margin-top:2px;font-size:9px;color:#cbd5e1;font-weight:800}
 .selection-bar button{height:40px;border-radius:11px;font-weight:1000}
 .selection-edit{padding:0 11px;background:#047857;color:#fff;font-size:9px}
+.selection-state{padding:0 11px;background:#b45309;color:#fff;font-size:9px}
 .selection-work{padding:0 11px;background:#1d4ed8;color:#fff;font-size:9px}
 .selection-delete{padding:0 11px;background:#7f1d1d;color:#fff;font-size:9px}
 .selection-close{width:42px;background:#334155;color:#fff;font-size:16px}
@@ -264,10 +265,10 @@
   .bottom-bar{gap:2px;padding-left:3px;padding-right:3px}
   .bottom-bar .tool{font-size:7px}
   .bottom-bar .tool-icon{font-size:17px}
-  .selection-bar{left:8px;right:8px;grid-template-columns:repeat(3,minmax(0,1fr)) 38px;min-height:96px}
+  .selection-bar{left:8px;right:8px;grid-template-columns:repeat(4,minmax(0,1fr)) 38px;min-height:96px}
   .selection-info{grid-column:1 / -1}
   .selection-info small{font-size:8px}
-  .selection-edit,.selection-work,.selection-delete{padding:0 5px;font-size:8px}
+  .selection-edit,.selection-state,.selection-work,.selection-delete{padding:0 4px;font-size:7px}
   .selection-close{width:38px}
   #selectionBar:not(.hidden)~.view-controls{top:178px}
 }
@@ -546,3 +547,16 @@
 
 .calc-grid.single{grid-template-columns:minmax(0,1fr)}
 .calc-rule-note{margin:8px 0 12px;padding:9px 11px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;font-size:10px;line-height:1.4;font-weight:800}
+
+.wall-state-card{width:100%;max-width:520px;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.3)}
+.wall-state-help{margin:2px 0 12px;color:#64748b;font-size:11px;line-height:1.45}
+.wall-state-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.wall-state-grid button{min-height:82px;border:1px solid #dbe3ef;border-radius:16px;background:#f8fafc;color:#334155;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:9px;font-weight:1000}
+.wall-state-grid button b{font-size:22px;line-height:1}
+.wall-state-grid button span{font-size:9px}
+.wall-state-grid button small{font-size:8px;color:#64748b;font-weight:800;text-align:center}
+.wall-state-grid button.active{border-color:#b45309;background:#fffbeb;color:#92400e;box-shadow:0 0 0 2px rgba(180,83,9,.09)}
+.wall-state-grid button[data-wall-state="demolish"].active{background:#fef2f2;border-color:#dc2626;color:#991b1b}
+.wall-state-grid button[data-wall-state="new"].active{background:#f0fdf4;border-color:#16a34a;color:#166534}
+.wall-state-summary{margin-top:10px;padding:10px 12px;border-radius:12px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:900}
+@media(max-width:390px){.wall-state-grid{grid-template-columns:1fr 1fr}.wall-state-grid button{min-height:72px}}
