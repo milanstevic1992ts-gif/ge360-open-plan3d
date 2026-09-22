@@ -141,12 +141,14 @@
       </div>
       <p id="openingQuickHint" class="opening-quick-hint">Scegli la misura. La posizione è già presa dal punto toccato sul muro.</p>
 
-      <div id="doorPresetWrap" class="opening-preset-grid">
-        <button data-opening-preset="60"><b>60</b><small>cm</small></button>
-        <button data-opening-preset="70"><b>70</b><small>cm</small></button>
-        <button data-opening-preset="80"><b>80</b><small>cm</small></button>
-        <button data-opening-preset="custom" class="custom"><b>✎</b><small>PERSONALIZZATA</small></button>
+      <div id="doorTypeWrap" class="door-type-grid">
+        <button data-door-kind="internal"><b>🚪</b><small>INTERNA</small></button>
+        <button data-door-kind="double"><b>🚪🚪</b><small>DOPPIA</small></button>
+        <button data-door-kind="sliding"><b>⇆</b><small>SCORREVOLE</small></button>
+        <button data-door-kind="armored"><b>🛡</b><small>BLINDATA</small></button>
+        <button data-door-kind="armored-double"><b>🛡🛡</b><small>BLINDATA DOPPIA</small></button>
       </div>
+      <div id="doorPresetWrap" class="opening-preset-grid"></div>
 
       <div id="windowPresetWrap" class="opening-preset-grid window hidden">
         <button data-opening-preset="single"><b>▯</b><small>SINGOLA</small><span id="singleWindowSize"></span></button>
