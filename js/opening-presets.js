@@ -1,11 +1,36 @@
 export const DEFAULT_OPENING_PRESETS = Object.freeze({
   doorHeightCm: 210,
+  armoredDoorHeightCm: 210,
   windowSingleWidthCm: 80,
   windowSingleHeightCm: 120,
   windowSingleSillCm: 90,
   windowDoubleWidthCm: 140,
   windowDoubleHeightCm: 120,
   windowDoubleSillCm: 90
+});
+
+export const DOOR_KINDS = Object.freeze([
+  'internal',
+  'double',
+  'sliding',
+  'armored',
+  'armored-double'
+]);
+
+export const DOOR_KIND_LABELS = Object.freeze({
+  internal: 'Porta interna',
+  double: 'Porta doppia',
+  sliding: 'Porta scorrevole',
+  armored: 'Porta blindata',
+  'armored-double': 'Blindata doppia'
+});
+
+const DOOR_WIDTH_PRESETS = Object.freeze({
+  internal: [60, 70, 80, 90],
+  double: [120, 140, 160],
+  sliding: [70, 80, 90],
+  armored: [80, 85, 90],
+  'armored-double': [120, 140, 160]
 });
 
 function n(value, fallback) {
@@ -18,18 +43,50 @@ function nn(value, fallback) {
   return Number.isFinite(x) && x >= 0 ? x : fallback;
 }
 
-export function openingPresetSpec(type, key, settings = {}) {
+export function normalizeDoorKind(value) {
+  const kind = String(value || 'internal');
+  return DOOR_KINDS.includes(kind) ? kind : 'internal';
+}
+
+export function doorPresetKeys(kind) {
+  return (DOOR_WIDTH_PRESETS[normalizeDoorKind(kind)] || []).map(String);
+}
+
+export function doorKindSpec(kind) {
+  const normalized = normalizeDoorKind(kind);
+  return {
+    kind: normalized,
+    label: DOOR_KIND_LABELS[normalized],
+    leaves: normalized === 'double' || normalized === 'armored-double' ? 2 : 1,
+    sliding: normalized === 'sliding',
+    armored: normalized === 'armored' || normalized === 'armored-double'
+  };
+}
+
+export function openingPresetSpec(type, key, settings = {}, context = {}) {
   if (type === 'door') {
-    if (!['60', '70', '80'].includes(String(key))) return null;
+    const kind = normalizeDoorKind(context.doorKind || settings.lastDoorKind || 'internal');
+    const widths = doorPresetKeys(kind);
+    if (!widths.includes(String(key))) return null;
+    const meta = doorKindSpec(kind);
     return {
       key: String(key),
       label: String(key) + ' cm',
       widthCm: Number(key),
-      heightCm: n(settings.doorHeightCm, DEFAULT_OPENING_PRESETS.doorHeightCm),
-      sillHeightCm: null
+      heightCm: meta.armored
+        ? n(settings.armoredDoorHeightCm, DEFAULT_OPENING_PRESETS.armoredDoorHeightCm)
+        : n(settings.doorHeightCm, DEFAULT_OPENING_PRESETS.doorHeightCm),
+      sillHeightCm: null,
+      doorKind: meta.kind,
+      category: meta.armored ? 'armored' : 'interior',
+      leaves: meta.leaves,
+      sliding: meta.sliding,
+      armored: meta.armored
     };
   }
+
   if (type !== 'window') return null;
+
   if (key === 'single') {
     return {
       key,
@@ -39,6 +96,7 @@ export function openingPresetSpec(type, key, settings = {}) {
       sillHeightCm: nn(settings.windowSingleSillCm, DEFAULT_OPENING_PRESETS.windowSingleSillCm)
     };
   }
+
   if (key === 'double') {
     return {
       key,
@@ -48,19 +106,23 @@ export function openingPresetSpec(type, key, settings = {}) {
       sillHeightCm: nn(settings.windowDoubleSillCm, DEFAULT_OPENING_PRESETS.windowDoubleSillCm)
     };
   }
+
   return null;
 }
 
 export function detectOpeningPreset(opening, settings = {}) {
   if (!opening) return null;
-  if (opening.presetKey) return opening.presetKey;
+  if (opening.presetKey && opening.presetKey !== 'custom') return opening.presetKey;
   const width = Number(opening.widthCm);
+
   if (opening.type === 'door') {
-    for (const key of ['60', '70', '80']) {
+    const kind = normalizeDoorKind(opening.doorKind || (opening.armored ? 'armored' : 'internal'));
+    for (const key of doorPresetKeys(kind)) {
       if (Math.abs(width - Number(key)) < 0.05) return key;
     }
     return 'custom';
   }
+
   if (opening.type === 'window') {
     const single = openingPresetSpec('window', 'single', settings);
     const double = openingPresetSpec('window', 'double', settings);
@@ -68,7 +130,19 @@ export function detectOpeningPreset(opening, settings = {}) {
     if (double && Math.abs(width - double.widthCm) < 0.05) return 'double';
     return 'custom';
   }
+
   return null;
+}
+
+export function applyDoorKind(opening, kind) {
+  const meta = doorKindSpec(kind);
+  return Object.assign({}, opening, {
+    doorKind: meta.kind,
+    category: meta.armored ? 'armored' : 'interior',
+    leaves: meta.leaves,
+    sliding: meta.sliding,
+    armored: meta.armored
+  });
 }
 
 export function fitOpeningToWall(opening, wallLengthCm) {
@@ -97,6 +171,7 @@ export function offsetForReference(opening, wallLengthCm, referenceEnd) {
   const length = Number(wallLengthCm);
   const width = Number(out.widthCm);
   if (!Number.isFinite(length) || length <= 0 || !Number.isFinite(width) || width <= 0) return out;
+
   let center;
   if (Number.isFinite(Number(opening.position))) center = Number(opening.position) * length;
   else if (Number.isFinite(Number(opening.offsetCm))) {
@@ -104,8 +179,11 @@ export function offsetForReference(opening, wallLengthCm, referenceEnd) {
       ? length - Number(opening.offsetCm) - width / 2
       : Number(opening.offsetCm) + width / 2;
   } else center = length / 2;
+
   center = Math.max(width / 2, Math.min(length - width / 2, center));
   out.position = center / length;
-  out.offsetCm = Math.round((out.referenceEnd === 'b' ? length - center - width / 2 : center - width / 2) * 10) / 10;
+  out.offsetCm = Math.round((out.referenceEnd === 'b'
+    ? length - center - width / 2
+    : center - width / 2) * 10) / 10;
   return out;
 }
