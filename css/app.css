@@ -601,3 +601,32 @@
 .room-card-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
 .room-card-actions button{min-height:46px;border-radius:13px;font-size:9px;font-weight:1000}
 @media(max-width:390px){.room-card-counts{grid-template-columns:repeat(2,1fr)}.room-card-actions{grid-template-columns:1fr}}
+
+.geometry-check-card{width:100%;max-width:560px;max-height:92dvh;overflow:auto;background:#fff;border-radius:24px;padding:18px;box-shadow:0 22px 60px rgba(15,23,42,.3)}
+.geometry-check-card .settings-head p{margin:2px 0 0;color:#64748b;font-size:9px;font-weight:800}
+.geometry-check-summary{margin-top:10px;padding:11px 12px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;font-size:10px;font-weight:900}
+.geometry-check-summary.ok{background:#f0fdf4;border-color:#bbf7d0;color:#166534}
+.geometry-check-summary.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
+.geometry-check-summary.error{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.geometry-check-list{display:grid;gap:8px;margin-top:10px}
+.geometry-issue{padding:11px;border-radius:15px;border:1px solid #e2e8f0;background:#fff}
+.geometry-issue.error{border-color:#fecaca;background:#fff7f7}
+.geometry-issue.warning{border-color:#fde68a;background:#fffdf5}
+.geometry-issue.info{border-color:#bfdbfe;background:#f8fbff}
+.geometry-issue-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.geometry-issue-head b{font-size:10px;color:#0f172a}
+.geometry-issue-head span{font-size:7px;font-weight:1000;padding:3px 6px;border-radius:999px;background:#e2e8f0;color:#475569}
+.geometry-issue.error .geometry-issue-head span{background:#fee2e2;color:#991b1b}
+.geometry-issue.warning .geometry-issue-head span{background:#fef3c7;color:#92400e}
+.geometry-issue.info .geometry-issue-head span{background:#dbeafe;color:#1d4ed8}
+.geometry-issue p{margin:7px 0 0;font-size:10px;line-height:1.4;color:#475569}
+.geometry-issue-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:9px}
+.geometry-issue-actions button{min-height:36px;padding:0 10px;border-radius:10px;font-size:8px;font-weight:1000}
+.geometry-issue-actions .fix{background:#0f172a;color:#fff}
+.geometry-issue-actions .ignore{background:#f1f5f9;color:#64748b}
+.geometry-check-footer{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.geometry-check-footer button{min-height:46px;border-radius:13px;font-size:9px;font-weight:1000}
+.status-pill.geom-ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.status-pill.geom-warn{background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+.status-pill.geom-error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+@media(max-width:390px){.geometry-check-footer{grid-template-columns:1fr}.geometry-issue-actions{justify-content:stretch}.geometry-issue-actions button{flex:1}}
