@@ -97,6 +97,17 @@ import { createPdfReader } from './pdf-reader.js';
   var pdfReaderBlob = null;
   var pdfReaderVersion = null;
   var pdfReaderFilename = '';
+  var connectionState = {
+    checking: false,
+    checked: false,
+    reachable: false,
+    authenticated: false,
+    apiOk: false,
+    pdfOk: null,
+    latencyMs: null,
+    checkedAt: null,
+    error: null
+  };
 
   function uid(prefix) {
     return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -151,6 +162,7 @@ import { createPdfReader } from './pdf-reader.js';
     restoreBridgeTunnel();
     initLaser();
     setTimeout(function () { flushOfflineQueue(); flushPendingPhotos(); }, 1200);
+    setTimeout(refreshConnectionIndicator, 1600);
   }
 
   function currentPlan() {
@@ -2918,9 +2930,280 @@ import { createPdfReader } from './pdf-reader.js';
     var hasKey = !!String(key || '').trim();
     var endpoint = hasKey ? api + '/health' : backendRootFromApi(api) + '/healthz';
     var headers = hasKey ? { 'X-GE360-API-Key': String(key).trim() } : {};
+    var started = Date.now();
     var res = await fetchWithTimeout(endpoint, { headers: headers }, 6000);
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    return { reachable: true, authenticated: hasKey };
+    return {
+      reachable: true,
+      authenticated: hasKey,
+      latencyMs: Math.max(0, Date.now() - started),
+      status: res.status
+    };
+  }
+
+  function diagnosticSetRow(name, state, value, detail) {
+    var row = $('diag' + name);
+    var valueEl = $('diag' + name + 'Value');
+    var textEl = $('diag' + name + 'Text');
+    if (!row || !valueEl || !textEl) return;
+    row.className = 'diag-row ' + (state || 'checking');
+    valueEl.textContent = value || '…';
+    textEl.textContent = detail || '';
+  }
+
+  function diagnosticOverall(state, icon, title, text) {
+    $('diagOverall').className = 'diag-overall ' + state;
+    $('diagOverallIcon').textContent = icon;
+    $('diagOverallTitle').textContent = title;
+    $('diagOverallText').textContent = text;
+  }
+
+  function latestDiagnosticPlan() {
+    return library
+      .filter(function (plan) { return plan && plan.backend && (plan.backend.planId || plan.id) && plan.backend.result; })
+      .sort(function (a, b) {
+        return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      })[0] || null;
+  }
+
+  async function looksLikePdf(blob) {
+    if (!blob || blob.size < 5) return false;
+    try {
+      var head = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+      return String.fromCharCode.apply(null, Array.from(head)) === '%PDF-';
+    } catch (_) {
+      return blob.type === 'application/pdf';
+    }
+  }
+
+  function openConnectionDiagnostics() {
+    closeSettings();
+    $('connectionDiagBackdrop').classList.remove('hidden');
+    $('diagServerUrl').textContent = settings.serverUrl || '—';
+    $('diagBridgeAddress').textContent = settings.bridgeAddress || '—';
+    $('diagBridgeEndpoint').textContent = settings.bridgeEndpoint || '—';
+    runConnectionDiagnostics();
+  }
+
+  function closeConnectionDiagnostics() {
+    $('connectionDiagBackdrop').classList.add('hidden');
+  }
+
+  async function refreshConnectionIndicator() {
+    if (!settings.serverUrl || connectionState.checking) {
+      updateServerBadge();
+      return;
+    }
+    connectionState.checking = true;
+    updateServerBadge();
+    try {
+      var probe = await probeServer(settings.serverUrl, settings.apiKey);
+      connectionState.checked = true;
+      connectionState.reachable = true;
+      connectionState.authenticated = probe.authenticated;
+      connectionState.apiOk = probe.authenticated;
+      connectionState.latencyMs = probe.latencyMs;
+      connectionState.checkedAt = new Date().toISOString();
+      connectionState.error = null;
+    } catch (e) {
+      connectionState.checked = true;
+      connectionState.reachable = false;
+      connectionState.authenticated = false;
+      connectionState.apiOk = false;
+      connectionState.latencyMs = null;
+      connectionState.checkedAt = new Date().toISOString();
+      connectionState.error = e && e.message ? e.message : String(e);
+    } finally {
+      connectionState.checking = false;
+      updateServerBadge();
+    }
+  }
+
+  async function runConnectionDiagnostics() {
+    if (connectionState.checking && !$('connectionDiagBackdrop').classList.contains('hidden')) return;
+    connectionState.checking = true;
+    connectionState.pdfOk = null;
+    updateServerBadge();
+    $('runConnectionDiagBtn').disabled = true;
+    $('diagAdvice').classList.add('hidden');
+    diagnosticOverall('checking', '…', 'Controllo connessione…', 'Verifico tunnel, backend, API e canale PDF.');
+    ['Bridge','Backend','Auth','Api','Pdf'].forEach(function (name) {
+      diagnosticSetRow(name, 'checking', '…', 'Controllo in corso…');
+    });
+    $('diagServerUrl').textContent = settings.serverUrl || '—';
+    $('diagBridgeAddress').textContent = settings.bridgeAddress || '—';
+    $('diagBridgeEndpoint').textContent = settings.bridgeEndpoint || '—';
+    $('diagLatency').textContent = '—';
+
+    var bridgeOk = false;
+    var backendOk = false;
+    var authOk = false;
+    var apiOk = false;
+    var pdfOk = null;
+    var advice = '';
+
+    try {
+      var tunnel = nativePlugin('GE360Tunnel');
+      if (tunnel) {
+        try {
+          var bridgeState = await tunnel.restore();
+          settings.bridgeConfigured = !!bridgeState.configured || !!settings.bridgeConfigured;
+          settings.bridgeConnected = !!bridgeState.connected;
+          bridgeOk = !!bridgeState.connected;
+          persistSettings();
+          diagnosticSetRow(
+            'Bridge',
+            bridgeOk ? 'ok' : settings.bridgeConfigured ? 'warn' : 'fail',
+            bridgeOk ? 'ATTIVO' : settings.bridgeConfigured ? 'FERMO' : 'ASSENTE',
+            bridgeOk ? 'Tunnel WireGuard GE360 attivo sul telefono.' :
+              settings.bridgeConfigured ? 'Profilo presente, ma il tunnel non risulta connesso.' :
+              'Nessun profilo Direct Bridge configurato.'
+          );
+        } catch (bridgeError) {
+          diagnosticSetRow('Bridge', 'fail', 'ERRORE', bridgeError && bridgeError.message ? bridgeError.message : 'Impossibile leggere lo stato del tunnel.');
+        }
+      } else {
+        diagnosticSetRow('Bridge', settings.serverUrl ? 'warn' : 'fail', 'N/D',
+          settings.serverUrl ? 'Plugin tunnel non disponibile qui; provo comunque il backend configurato.' : 'Plugin Direct Bridge non disponibile.');
+      }
+
+      var api = normalizeBackendApiUrl(settings.serverUrl);
+      if (!api) {
+        diagnosticSetRow('Backend', 'fail', 'NO URL', 'Backend non configurato.');
+        diagnosticSetRow('Auth', 'fail', 'NO URL', 'Prima configura il server.');
+        diagnosticSetRow('Api', 'fail', 'NO URL', 'Prima configura il server.');
+        diagnosticSetRow('Pdf', 'warn', 'NON TESTATO', 'Serve prima una connessione al backend.');
+        advice = 'Configura il backend o scansiona il QR GE360. Finché manca l’indirizzo del server, la dashboard non può verificare una connessione reale.';
+        throw new Error('Backend non configurato');
+      }
+
+      var root = backendRootFromApi(api);
+      var started = Date.now();
+      try {
+        var healthz = await fetchWithTimeout(root + '/healthz', {}, 8000);
+        if (!healthz.ok) throw new Error('HTTP ' + healthz.status);
+        var latency = Math.max(0, Date.now() - started);
+        backendOk = true;
+        connectionState.latencyMs = latency;
+        $('diagLatency').textContent = latency + ' ms';
+        diagnosticSetRow('Backend', 'ok', 'ONLINE', 'Il server Debian risponde a /healthz in ' + latency + ' ms.');
+      } catch (backendError) {
+        diagnosticSetRow('Backend', 'fail', 'OFFLINE',
+          backendError && backendError.name === 'AbortError' ? 'Timeout: il server non risponde.' :
+          'Nessuna risposta dal backend: ' + (backendError && backendError.message ? backendError.message : backendError));
+        advice = bridgeOk
+          ? 'Il tunnel risulta attivo, ma il backend non risponde sulla porta 9888. Controlla il servizio ge360-rilievi-backend e il firewall del server.'
+          : 'Il telefono non raggiunge il backend. Riconnetti il Direct Bridge e riprova.';
+      }
+
+      if (!backendOk) {
+        diagnosticSetRow('Auth', 'fail', 'NON TESTATA', 'Il backend deve essere raggiungibile prima del controllo API Key.');
+        diagnosticSetRow('Api', 'fail', 'NON TESTATA', 'Il backend deve essere raggiungibile prima del test API.');
+        diagnosticSetRow('Pdf', 'warn', 'NON TESTATO', 'Il backend deve essere raggiungibile prima del test PDF.');
+      } else if (!String(settings.apiKey || '').trim()) {
+        diagnosticSetRow('Auth', 'warn', 'MANCANTE', 'Il server risponde, ma non è configurata una API Key.');
+        diagnosticSetRow('Api', 'warn', 'BLOCCATA', 'Le API protette richiedono la chiave.');
+        diagnosticSetRow('Pdf', 'warn', 'BLOCCATO', 'Il PDF richiede accesso autenticato.');
+        advice = 'Il server è raggiungibile, ma manca la API Key. Scansiona di nuovo il QR o inserisci la chiave nelle impostazioni.';
+      } else {
+        try {
+          var authStart = Date.now();
+          var authRes = await fetchWithTimeout(api + '/health', {
+            headers: { 'X-GE360-API-Key': String(settings.apiKey).trim() }
+          }, 8000);
+          if (!authRes.ok) {
+            if (authRes.status === 401) throw new Error('API Key rifiutata (HTTP 401)');
+            throw new Error('HTTP ' + authRes.status);
+          }
+          authOk = true;
+          diagnosticSetRow('Auth', 'ok', 'VALIDA', 'Autenticazione accettata in ' + Math.max(0, Date.now() - authStart) + ' ms.');
+        } catch (authError) {
+          diagnosticSetRow('Auth', 'fail', 'RIFIUTATA', authError && authError.message ? authError.message : String(authError));
+          advice = 'Il server risponde, ma la API Key non viene accettata. Rigenera o riscansiona il profilo GE360.';
+        }
+
+        if (authOk) {
+          try {
+            var catalog = await backendClient().fetchWorkCatalog();
+            if (!catalog) throw new Error('Risposta vuota');
+            apiOk = true;
+            diagnosticSetRow('Api', 'ok', 'OK', 'Scambio dati JSON con le API GE360 riuscito.');
+          } catch (apiError) {
+            diagnosticSetRow('Api', 'fail', 'ERRORE', apiError && apiError.message ? apiError.message : String(apiError));
+            advice = 'Health e autenticazione funzionano, ma una API operativa fallisce. Controlla la versione del backend o i log del servizio.';
+          }
+
+          var plan = latestDiagnosticPlan();
+          if (!plan) {
+            diagnosticSetRow('Pdf', 'warn', 'NESSUN TEST', 'Non c’è ancora un rilievo con PDF da usare come prova.');
+          } else {
+            var remotePlanId = plan.backend.planId || plan.id;
+            try {
+              var status = await backendClient().request('/plans/' + encodeURIComponent(remotePlanId), { timeout: 10000 });
+              if (!status || !status.files || !status.files.pdf) {
+                diagnosticSetRow('Pdf', 'warn', 'NON CREATO', 'Il rilievo più recente non espone ancora plan.pdf.');
+              } else {
+                var pdfBlob = await backendClient().request('/plans/' + encodeURIComponent(remotePlanId) + '/pdf', {
+                  as: 'blob',
+                  timeout: 20000
+                });
+                pdfOk = await looksLikePdf(pdfBlob);
+                if (!pdfOk) throw new Error('La risposta ricevuta non è un PDF valido');
+                diagnosticSetRow('Pdf', 'ok', 'OK', 'Download PDF riuscito · ' + Math.max(1, Math.round(pdfBlob.size / 1024)) + ' KB.');
+              }
+            } catch (pdfError) {
+              pdfOk = false;
+              diagnosticSetRow('Pdf', 'fail', 'ERRORE', pdfError && pdfError.message ? pdfError.message : String(pdfError));
+              if (apiOk) advice = 'Il backend e le API comunicano correttamente, ma il canale PDF fallisce. Il problema è isolato al download di plan.pdf, non alla connessione generale.';
+            }
+          }
+        } else {
+          diagnosticSetRow('Api', 'warn', 'BLOCCATA', 'Prima deve riuscire l’autenticazione.');
+          diagnosticSetRow('Pdf', 'warn', 'BLOCCATO', 'Prima deve riuscire l’autenticazione.');
+        }
+      }
+
+      connectionState.checked = true;
+      connectionState.reachable = backendOk;
+      connectionState.authenticated = authOk;
+      connectionState.apiOk = apiOk;
+      connectionState.pdfOk = pdfOk;
+      connectionState.checkedAt = new Date().toISOString();
+      connectionState.error = backendOk ? null : 'Backend non raggiungibile';
+
+      if (backendOk && authOk && apiOk && pdfOk !== false) {
+        diagnosticOverall('ok', '✓', 'GE360 è connesso', pdfOk === true
+          ? 'Bridge/backend/API/PDF comunicano correttamente.'
+          : 'Backend e API comunicano correttamente. Non c’è un PDF disponibile per il test.');
+      } else if (backendOk && (authOk || !settings.apiKey)) {
+        diagnosticOverall('warn', '!', 'Connessione parziale', pdfOk === false
+          ? 'Il server comunica, ma il PDF ha un problema separato.'
+          : 'Il server risponde, ma non tutti i controlli sono riusciti.');
+      } else {
+        diagnosticOverall('fail', '×', 'GE360 non è connesso completamente', 'Segui il controllo rosso qui sotto per capire dove si interrompe.');
+      }
+    } catch (_) {
+      connectionState.checked = true;
+      connectionState.reachable = backendOk;
+      connectionState.authenticated = authOk;
+      connectionState.apiOk = apiOk;
+      connectionState.pdfOk = pdfOk;
+      connectionState.checkedAt = new Date().toISOString();
+      if (!backendOk) diagnosticOverall('fail', '×', 'Backend non raggiungibile', 'La configurazione esiste, ma il telefono non riceve risposta dal server.');
+    } finally {
+      connectionState.checking = false;
+      $('runConnectionDiagBtn').disabled = false;
+      $('diagLastTest').textContent = new Date().toLocaleString('it-IT');
+      $('diagServerUrl').textContent = settings.serverUrl || '—';
+      $('diagBridgeAddress').textContent = settings.bridgeAddress || '—';
+      $('diagBridgeEndpoint').textContent = settings.bridgeEndpoint || '—';
+      if (advice) {
+        $('diagAdvice').textContent = advice;
+        $('diagAdvice').classList.remove('hidden');
+      }
+      updateServerBadge();
+      renderBridgeSettings();
+    }
   }
 
   function renderBridgeSettings() {
@@ -3058,17 +3341,32 @@ import { createPdfReader } from './pdf-reader.js';
   }
 
   function updateServerBadge() {
+    var badge = $('serverBadge');
     var configured = !!settings.serverUrl;
-    $('serverBadge').className = 'server-badge ' + (settings.bridgeConnected || configured ? 'online' : 'offline');
     var queued = offlineQueue.count();
-    if (settings.bridgeConnected) {
-      $('serverBadge').textContent = '● GE360 Bridge collegato' + (queued ? ' · ' + queued + ' da inviare' : '');
-    } else if (configured && settings.apiKey) {
-      $('serverBadge').textContent = '● Debian configurato' + (queued ? ' · ' + queued + ' da inviare' : '');
-    } else if (settings.bridgeConfigured) {
-      $('serverBadge').textContent = '● Bridge pronto · da collegare';
+    if (connectionState.checking) {
+      badge.className = 'server-badge checking';
+      badge.textContent = '● Verifico server…';
+    } else if (connectionState.checked && connectionState.reachable && connectionState.authenticated) {
+      badge.className = 'server-badge online';
+      badge.textContent = '● Backend collegato' +
+        (Number.isFinite(connectionState.latencyMs) ? ' · ' + connectionState.latencyMs + ' ms' : '') +
+        (queued ? ' · ' + queued + ' da inviare' : '');
+    } else if (connectionState.checked && connectionState.reachable) {
+      badge.className = 'server-badge configured';
+      badge.textContent = '● Server raggiungibile · API da verificare';
+    } else if (connectionState.checked && !connectionState.reachable) {
+      badge.className = 'server-badge offline';
+      badge.textContent = '● Server non raggiungibile' + (queued ? ' · ' + queued + ' da inviare' : '');
+    } else if (settings.bridgeConnected) {
+      badge.className = 'server-badge configured';
+      badge.textContent = '● Bridge attivo · server non verificato';
+    } else if (configured || settings.bridgeConfigured) {
+      badge.className = 'server-badge configured';
+      badge.textContent = '● Configurato · tocca per verificare';
     } else {
-      $('serverBadge').textContent = '● Debian non collegato';
+      badge.className = 'server-badge offline';
+      badge.textContent = '● Debian non collegato';
     }
   }
 
@@ -3139,6 +3437,7 @@ import { createPdfReader } from './pdf-reader.js';
       persistSettings();
       updateServerBadge();
       renderBridgeSettings();
+      setTimeout(refreshConnectionIndicator, 250);
     } catch (_) {
       settings.bridgeConnected = false;
       persistSettings();
@@ -3191,12 +3490,31 @@ import { createPdfReader } from './pdf-reader.js';
     var key = $('apiKey').value.trim();
     if (!url) return toast('Inserisci o scansiona il backend');
     toast('Test collegamento…');
+    connectionState.checking = true;
+    updateServerBadge();
     try {
       var probe = await probeServer(url, key);
       $('serverUrl').value = url;
+      connectionState.checked = true;
+      connectionState.reachable = true;
+      connectionState.authenticated = probe.authenticated;
+      connectionState.apiOk = probe.authenticated;
+      connectionState.latencyMs = probe.latencyMs;
+      connectionState.checkedAt = new Date().toISOString();
+      connectionState.error = null;
       toast(probe.authenticated ? 'Backend raggiungibile ✓' : 'Backend raggiungibile ✓ · manca API Key');
     } catch (e) {
+      connectionState.checked = true;
+      connectionState.reachable = false;
+      connectionState.authenticated = false;
+      connectionState.apiOk = false;
+      connectionState.latencyMs = null;
+      connectionState.checkedAt = new Date().toISOString();
+      connectionState.error = e && e.message ? e.message : String(e);
       toast('Connessione fallita: ' + (e.name === 'AbortError' ? 'timeout' : e.message));
+    } finally {
+      connectionState.checking = false;
+      updateServerBadge();
     }
   }
 
@@ -4937,8 +5255,18 @@ import { createPdfReader } from './pdf-reader.js';
   });
 
   $('newPlanBtn').addEventListener('click', newPlan);
+  $('serverBadge').addEventListener('click', openConnectionDiagnostics);
   $('settingsBtn').addEventListener('click', openSettings);
   $('closeSettingsBtn').addEventListener('click', closeSettings);
+  $('openConnectionDiagBtn').addEventListener('click', openConnectionDiagnostics);
+  $('closeConnectionDiagBtn').addEventListener('click', closeConnectionDiagnostics);
+  $('runConnectionDiagBtn').addEventListener('click', runConnectionDiagnostics);
+  $('connectionDiagBackdrop').addEventListener('click', function (e) { if (e.target === $('connectionDiagBackdrop')) closeConnectionDiagnostics(); });
+  $('diagSettingsBtn').addEventListener('click', function () { closeConnectionDiagnostics(); openSettings(); });
+  $('diagReconnectBtn').addEventListener('click', async function () {
+    await reconnectBridge();
+    await runConnectionDiagnostics();
+  });
   $('saveSettingsBtn').addEventListener('click', saveSettings);
   $('testServerBtn').addEventListener('click', testServer);
   $('scanQrBtn').addEventListener('click', scanBackendQr);
