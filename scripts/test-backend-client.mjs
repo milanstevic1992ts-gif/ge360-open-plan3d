@@ -105,6 +105,25 @@ assert.equal(version2.processed.rooms.length, 1);
 const oldPdf = await client.downloadArtifact(payload.planId, 'pdf', 2);
 assert.equal(oldPdf.type, 'application/pdf');
 
+let flakyPdfAttempts = 0;
+const flakyPdfServer = fakeServer({
+  ['GET /plans/' + payload.planId + '/pdf']: () => {
+    flakyPdfAttempts += 1;
+    if (flakyPdfAttempts === 1) throw new TypeError('temporary bridge interruption');
+    return { body: new Blob(['current-pdf'], { type: 'application/pdf' }) };
+  },
+  'GET /health': { body: { ok: true } }
+});
+const flakyPdfClient = createBackendClient({
+  baseUrl: '10.88.0.1:9888',
+  apiKey: 'k',
+  fetchImpl: flakyPdfServer.impl
+});
+const retriedPdf = await flakyPdfClient.downloadArtifact(payload.planId, 'pdf');
+assert.equal(retriedPdf.type, 'application/pdf');
+assert.equal(flakyPdfAttempts, 2, 'il PDF viene ritentato se il backend risponde al probe health');
+assert.equal(flakyPdfServer.calls.some(call => call.url.endsWith('/health')), true);
+
 const bad = createBackendClient({ baseUrl: 'http://10.88.0.1:9888/api/v1', apiKey: 'x', fetchImpl: fakeServer({
   'POST /plans/refine': { status: 422, body: { detail: [{ loc: ['body', 'planId'], msg: 'String should match pattern' }] } }
 }).impl });
