@@ -37,6 +37,8 @@ import { createPdfReader } from './pdf-reader.js';
   var selectedEntity = null;
   var selectionDrag = null;
   var wallStateEditingId = null;
+  var wallStateDraft = 'existing';
+  var wallThicknessDraft = null;
   var currentOpeningId = null;
   var sheetType = null;
   var numberText = '';
@@ -709,42 +711,126 @@ import { createPdfReader } from './pdf-reader.js';
     }[state] || 'ESISTENTE';
   }
 
+  function wallStateNeedsThickness(state) {
+    return state === 'demolish' || state === 'new';
+  }
+
+  function parseWallThicknessInput() {
+    var raw = String($('wallThicknessCustom').value || '').trim().replace(',', '.');
+    if (!raw) return null;
+    var value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? Math.round(value * 10) / 10 : NaN;
+  }
+
+  function renderWallStateDraft() {
+    var needsThickness = wallStateNeedsThickness(wallStateDraft);
+    document.querySelectorAll('#wallStateBackdrop [data-wall-state]').forEach(function (button) {
+      button.classList.toggle('active', button.dataset.wallState === wallStateDraft);
+    });
+
+    $('wallThicknessPanel').classList.toggle('hidden', !needsThickness);
+    document.querySelectorAll('#wallThicknessPanel [data-wall-thickness]').forEach(function (button) {
+      button.classList.toggle('active', Number(button.dataset.wallThickness) === Number(wallThicknessDraft));
+    });
+
+    if (needsThickness && Number.isFinite(wallThicknessDraft)) {
+      $('wallThicknessCustom').value = String(wallThicknessDraft).replace('.', ',');
+    } else if (!needsThickness) {
+      $('wallThicknessCustom').value = '';
+    }
+
+    var summary = 'Stato: ' + wallStateLabel(wallStateDraft);
+    if (needsThickness) {
+      summary += Number.isFinite(wallThicknessDraft)
+        ? ' · spessore ' + String(wallThicknessDraft).replace('.', ',') + ' cm'
+        : ' · scegli lo spessore';
+    } else {
+      summary += ' · nessuno spessore richiesto';
+    }
+    $('wallStateSummary').textContent = summary;
+  }
+
   function openWallStateEditor() {
     if (!selectedEntity || selectedEntity.type !== 'wall') return toast('Seleziona prima un muro');
     var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
     if (!wall) return toast('Muro non trovato');
     wallStateEditingId = wall.id;
-    var state = wallConstructionState(wall);
-    document.querySelectorAll('#wallStateBackdrop [data-wall-state]').forEach(function (button) {
-      button.classList.toggle('active', button.dataset.wallState === state);
-    });
-    $('wallStateSummary').textContent = 'Stato attuale: ' + wallStateLabel(state);
+    wallStateDraft = wallConstructionState(wall);
+    wallThicknessDraft = Number.isFinite(Number(wall.constructionThicknessCm))
+      ? Number(wall.constructionThicknessCm)
+      : null;
+    renderWallStateDraft();
     $('wallStateBackdrop').classList.remove('hidden');
   }
 
   function closeWallStateEditor() {
     wallStateEditingId = null;
+    wallStateDraft = 'existing';
+    wallThicknessDraft = null;
     $('wallStateBackdrop').classList.add('hidden');
   }
 
   function setWallConstructionState(state) {
     if (WALL_STATES.indexOf(state) === -1) return;
+    wallStateDraft = state;
+    if (!wallStateNeedsThickness(state)) wallThicknessDraft = null;
+    var wall = walls.find(function (w) { return w.id === wallStateEditingId; });
+    if (
+      wallStateNeedsThickness(state) &&
+      wall &&
+      wallConstructionState(wall) === state &&
+      Number.isFinite(Number(wall.constructionThicknessCm))
+    ) {
+      wallThicknessDraft = Number(wall.constructionThicknessCm);
+    }
+    renderWallStateDraft();
+    vibrate(10);
+  }
+
+  function chooseWallThickness(value) {
+    var thickness = Number(value);
+    if (!Number.isFinite(thickness) || thickness <= 0) return;
+    wallThicknessDraft = Math.round(thickness * 10) / 10;
+    $('wallThicknessCustom').value = String(wallThicknessDraft).replace('.', ',');
+    renderWallStateDraft();
+    vibrate(8);
+  }
+
+  function saveWallConstructionState() {
     var wall = walls.find(function (w) { return w.id === wallStateEditingId; });
     if (!wall) return closeWallStateEditor();
+
+    if (wallStateNeedsThickness(wallStateDraft)) {
+      var custom = parseWallThicknessInput();
+      if (Number.isNaN(custom)) return toast('Inserisci uno spessore valido');
+      if (Number.isFinite(custom)) wallThicknessDraft = custom;
+      if (!Number.isFinite(wallThicknessDraft) || wallThicknessDraft <= 0) {
+        return toast('Scegli lo spessore del muro');
+      }
+      if (wallThicknessDraft < 3 || wallThicknessDraft > 100) {
+        return toast('Spessore muro non valido');
+      }
+    }
+
     checkpoint();
-    wall.constructionState = state;
-    if (state === 'existing') {
+    wall.constructionState = wallStateDraft;
+    if (wallStateNeedsThickness(wallStateDraft)) {
+      wall.constructionThicknessCm = wallThicknessDraft;
+    } else {
       delete wall.constructionThicknessCm;
       delete wall.thicknessCm;
+      delete wall.thicknessMm;
     }
+
     surfaceCache = null;
     persistActive();
     closeWallStateEditor();
     updateSelectionBar();
     render();
     vibrate(16);
-    toast('Muro: ' + wallStateLabel(state));
+    toast('Muro: ' + wallStateLabel(wall.constructionState));
   }
+
 
   function selectableEntityAt(p) {
     // Aperture prima dei muri: altrimenti una porta coincide geometricamente col muro
@@ -4138,9 +4224,25 @@ import { createPdfReader } from './pdf-reader.js';
     return createBackendClient({ baseUrl: settings.serverUrl, apiKey: settings.apiKey });
   }
 
+  function wallsMissingRequiredThickness(sourceWalls) {
+    return (sourceWalls || walls).filter(function (wall) {
+      var state = wallConstructionState(wall);
+      return wallStateNeedsThickness(state) &&
+        (!Number.isFinite(Number(wall.constructionThicknessCm)) || Number(wall.constructionThicknessCm) <= 0);
+    });
+  }
+
   function openCalc() {
     cancelPickModes();
     if (!walls.length) return toast('Prima disegna la planimetria');
+    var missingThickness = wallsMissingRequiredThickness(walls);
+    if (missingThickness.length) {
+      selectedEntity = { type: 'wall', id: missingThickness[0].id, wallIds: [missingThickness[0].id], name: 'Muro' };
+      setMode('select', false);
+      updateSelectionBar();
+      openWallStateEditor();
+      return toast('Completa lo spessore del muro prima del calcolo');
+    }
     persistActive();
     var plan = currentPlan();
     var payload = planPayload(plan);
@@ -4277,6 +4379,10 @@ import { createPdfReader } from './pdf-reader.js';
     var plan = library.find(function (p) { return p.id === id; });
     if (!plan) return;
     if (id === activePlanId) persistActive();
+    var missingThickness = wallsMissingRequiredThickness(plan.walls || []);
+    if (missingThickness.length) {
+      return toast('Manca lo spessore di ' + missingThickness.length + ' muro/i da demolire o costruire');
+    }
     var payload = planPayload(plan);
     if (!payload.planId) return toast('Identificativo rilievo non valido');
     if (!measuredWallCount(payload)) return toast('Serve almeno un muro misurato');
@@ -6137,11 +6243,27 @@ import { createPdfReader } from './pdf-reader.js';
   $('editSelectedBtn').addEventListener('click', editSelectedEntity);
   $('wallStateBtn').addEventListener('click', openWallStateEditor);
   $('closeWallStateBtn').addEventListener('click', closeWallStateEditor);
+  $('saveWallStateBtn').addEventListener('click', saveWallConstructionState);
   $('wallStateBackdrop').addEventListener('click', function (e) {
     if (e.target === $('wallStateBackdrop')) closeWallStateEditor();
   });
   document.querySelectorAll('#wallStateBackdrop [data-wall-state]').forEach(function (button) {
     button.addEventListener('click', function () { setWallConstructionState(button.dataset.wallState); });
+  });
+  document.querySelectorAll('#wallThicknessPanel [data-wall-thickness]').forEach(function (button) {
+    button.addEventListener('click', function () { chooseWallThickness(button.dataset.wallThickness); });
+  });
+  $('wallThicknessCustom').addEventListener('input', function () {
+    var value = parseWallThicknessInput();
+    wallThicknessDraft = Number.isFinite(value) ? value : null;
+    document.querySelectorAll('#wallThicknessPanel [data-wall-thickness]').forEach(function (button) {
+      button.classList.toggle('active', Number(button.dataset.wallThickness) === Number(wallThicknessDraft));
+    });
+    var summary = 'Stato: ' + wallStateLabel(wallStateDraft) +
+      (Number.isFinite(wallThicknessDraft)
+        ? ' · spessore ' + String(wallThicknessDraft).replace('.', ',') + ' cm'
+        : ' · scegli lo spessore');
+    $('wallStateSummary').textContent = summary;
   });
   $('workSelectedBtn').addEventListener('click', openWorksForSelection);
   $('deleteSelectedBtn').addEventListener('click', deleteSelectedEntity);
