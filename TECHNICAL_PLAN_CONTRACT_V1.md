@@ -101,7 +101,7 @@ Works keep the current contract:
 - `id`
 - `catalogId`
 - `label`
-- `targetType: room | plan | wall | opening`
+- `targetType: room | plan | wall`
 - `targetId`
 - `targetIds`
 - `quantityRule`
