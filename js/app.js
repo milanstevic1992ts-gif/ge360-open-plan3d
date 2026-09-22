@@ -959,6 +959,36 @@ import { createPdfReader } from './pdf-reader.js';
     vibrate(14);
   }
 
+  function editSelectedEntity() {
+    if (!selectedEntity) return toast('Seleziona prima un muro o una stanza');
+
+    if (selectedEntity.type === 'wall') {
+      var wall = walls.find(function (w) { return w.id === selectedEntity.id; });
+      if (!wall) return toast('Muro non trovato');
+      editWallMeasurement(wall);
+      return;
+    }
+
+    var face = faceForWallIds(selectedEntity.wallIds || []);
+    if (!face) return toast('Non riesco a riconoscere questa stanza');
+
+    var existing = selectedEntity.id
+      ? rooms.find(function (r) { return r.id === selectedEntity.id; })
+      : faceRoom(face);
+
+    pendingRoomFace = face;
+    pendingRoomId = existing ? existing.id : null;
+    selectedRoomName = existing ? existing.name : '';
+    $('roomCustomName').value = existing && existing.custom ? existing.name : '';
+    $('roomHeightInput').value = existing && existing.heightCm ? metersText(existing.heightCm) : '';
+    $('roomTilingInput').value = existing && existing.tilingHeightCm ? metersText(existing.tilingHeightCm) : '';
+    document.querySelectorAll('[data-room-name]').forEach(function (b) {
+      b.classList.toggle('selected', !!existing && existing.name === b.dataset.roomName);
+    });
+    $('roomBackdrop').classList.remove('hidden');
+    vibrate(14);
+  }
+
   function editOpening(opening) {
     if (!opening) return;
     openOpeningQuick(opening, false);
@@ -3742,7 +3772,6 @@ import { createPdfReader } from './pdf-reader.js';
     var total = payload.walls.length;
     var measured = measuredWallCount(payload);
     $('calcHeightInput').value = metersText(Math.round(wallHeightM * 1000) / 10);
-    $('calcThicknessInput').value = String(wallThicknessCm).replace('.', ',');
     $('calcReferenceSelect').value = wallReference;
     var info = $('calcInfo');
     info.className = 'calc-info';
@@ -3774,11 +3803,11 @@ import { createPdfReader } from './pdf-reader.js';
 
   function submitCalc() {
     var h = parseMetersInput($('calcHeightInput').value);
-    var t = Number(String($('calcThicknessInput').value || '').replace(',', '.'));
     if (!h || h < 1.5 || h > 10) return toast('Altezza pareti non valida');
-    if (!Number.isFinite(t) || t < 3 || t > 100) return toast('Spessore muri non valido (cm)');
     wallHeightM = h;
-    wallThicknessCm = t;
+    // Fase 1: nel rilievo base non chiediamo lo spessore.
+    // wallThicknessCm resta solo per compatibilità con il contratto backend esistente;
+    // verrà valorizzato esplicitamente nelle future lavorazioni che lo richiedono.
     wallReference = $('calcReferenceSelect').value || 'interior';
     surfaceCache = null;
     persistActive();
@@ -5483,6 +5512,7 @@ import { createPdfReader } from './pdf-reader.js';
   $('drawBtn').addEventListener('click', function () { setMode('draw'); });
   $('selectBtn').addEventListener('click', function () { setMode('select'); });
   $('createRoomBtn').addEventListener('click', openRectRoomModal);
+  $('editSelectedBtn').addEventListener('click', editSelectedEntity);
   $('workSelectedBtn').addEventListener('click', openWorksForSelection);
   $('deleteSelectedBtn').addEventListener('click', deleteSelectedEntity);
   $('closeSelectionBtn').addEventListener('click', function () { clearSelection(true); });
