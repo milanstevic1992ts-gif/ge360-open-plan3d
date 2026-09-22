@@ -13,6 +13,7 @@ import { openingPresetSpec, detectOpeningPreset, fitOpeningToWall, offsetForRefe
 import { BUNDLED_WORK_CATALOG, loadCachedWorkCatalog, saveCachedWorkCatalog, loadWorkUsage, recordWorkUse, searchWorkCatalog } from './work-catalog.js';
 import { createPdfReader } from './pdf-reader.js';
 import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines } from './construction-quantities.js';
+import { constructionVisual, activeConstructionStates } from './construction-visuals.js';
 
 (function () {
   'use strict';
@@ -6115,6 +6116,82 @@ import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines }
     });
   }
 
+  function updateConstructionLegend() {
+    var legend = $('constructionLegend');
+    if (!legend) return;
+    var active = new Set(activeConstructionStates(walls));
+    legend.querySelectorAll('[data-construction-state]').forEach(function (item) {
+      item.classList.toggle('hidden', !active.has(item.dataset.constructionState));
+    });
+    legend.classList.toggle('hidden', active.size === 0);
+  }
+
+  function drawConstructionWall(wall, selected) {
+    var visual = constructionVisual(wall && wall.constructionState);
+    var sa = worldToScreen(wall.a);
+    var sb = worldToScreen(wall.b);
+
+    ctx.save();
+    ctx.lineCap = visual.state === 'demolish' ? 'butt' : 'round';
+    ctx.lineJoin = 'round';
+
+    if (selected) {
+      ctx.strokeStyle = 'rgba(37,99,235,.32)';
+      ctx.lineWidth = Math.max(visual.lineWidth + 6, 14);
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(sa.x, sa.y);
+      ctx.lineTo(sb.x, sb.y);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = visual.stroke;
+    ctx.lineWidth = visual.lineWidth;
+    ctx.setLineDash(visual.dash || []);
+    ctx.beginPath();
+    ctx.moveTo(sa.x, sa.y);
+    ctx.lineTo(sb.x, sb.y);
+    ctx.stroke();
+
+    // Piccoli segni tecnici rendono leggibili gli stati anche senza affidarsi solo al colore.
+    if (visual.state === 'demolish') {
+      var dx = sb.x - sa.x;
+      var dy = sb.y - sa.y;
+      var len = Math.max(1, Math.hypot(dx, dy));
+      var ux = dx / len, uy = dy / len;
+      var nx = -uy, ny = ux;
+      var step = Math.max(30, Math.min(52, len / 4));
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.7;
+      for (var d = step / 2; d < len; d += step) {
+        var px = sa.x + ux * d, py = sa.y + uy * d;
+        ctx.beginPath();
+        ctx.moveTo(px - ux * 5 - nx * 5, py - uy * 5 - ny * 5);
+        ctx.lineTo(px + ux * 5 + nx * 5, py + uy * 5 + ny * 5);
+        ctx.moveTo(px - ux * 5 + nx * 5, py - uy * 5 + ny * 5);
+        ctx.lineTo(px + ux * 5 - nx * 5, py + uy * 5 - ny * 5);
+        ctx.stroke();
+      }
+    } else if (visual.state === 'close-opening') {
+      var cdx = sb.x - sa.x;
+      var cdy = sb.y - sa.y;
+      var clen = Math.max(1, Math.hypot(cdx, cdy));
+      var cux = cdx / clen, cuy = cdy / clen;
+      var cnx = -cuy, cny = cux;
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.4;
+      for (var cd = 14; cd < clen; cd += 22) {
+        var cx = sa.x + cux * cd, cy = sa.y + cuy * cd;
+        ctx.beginPath();
+        ctx.moveTo(cx - cnx * 6, cy - cny * 6);
+        ctx.lineTo(cx + cnx * 6, cy + cny * 6);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+
   function render() {
     if ($('editor').classList.contains('hidden')) return;
     var w = canvas.clientWidth, h = canvas.clientHeight;
@@ -6127,20 +6204,11 @@ import { wallConstructionMetrics, summarizeConstruction, constructionWorkLines }
     drawSelectionOverlay();
     rawStrokes.forEach(function (s) { if (!s.manualEdited) drawPolyline(s.raw, '#cbd5e1', 3); });
     walls.forEach(function (wall) {
-      ctx.save();
       var selectionWall = mode === 'select' && selectedEntity && selectedEntity.type === 'wall' && selectedEntity.id === wall.id;
       var wallHighlighted = wall.id === selectedWallId || selectionWall;
-      ctx.strokeStyle = wallHighlighted ? '#2563eb' : '#0f172a';
-      ctx.lineWidth = wallHighlighted ? 10 : 8;
-      ctx.lineCap = 'round';
-      var sa = worldToScreen(wall.a);
-      var sb = worldToScreen(wall.b);
-      ctx.beginPath();
-      ctx.moveTo(sa.x, sa.y);
-      ctx.lineTo(sb.x, sb.y);
-      ctx.stroke();
-      ctx.restore();
+      drawConstructionWall(wall, wallHighlighted);
     });
+    updateConstructionLegend();
     walls.forEach(drawMeasure);
     drawDiagonals();
     openings.forEach(drawOpening);
